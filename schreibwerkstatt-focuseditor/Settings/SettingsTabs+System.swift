@@ -118,6 +118,7 @@ struct SpellcheckSettingsTab: View {
 struct AccountSettingsTab: View {
     @EnvironmentObject private var auth: AuthStore
     @EnvironmentObject private var editorBundle: EditorBundleStore
+    @EnvironmentObject private var core: AppCore
     // Nur im DMG-Target — im App-Store-Build gibt es keinen Sparkle-Updater.
     #if SPARKLE
     @EnvironmentObject private var updater: UpdaterController
@@ -125,6 +126,7 @@ struct AccountSettingsTab: View {
     @Environment(\.openURL) private var openURL
     @State private var showLogoutAlert = false
     @State private var showClearCacheAlert = false
+    @State private var showResetMirrorAlert = false
 
     var body: some View {
         Form {
@@ -195,6 +197,17 @@ struct AccountSettingsTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                HStack {
+                    Spacer()
+                    Button(t("settings.account.resetMirror"), role: .destructive) { showResetMirrorAlert = true }
+                }
+                Text(t("settings.account.resetMirrorHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Diagnose-Bericht für Support-Anfragen (Zustand + eigene
@@ -236,6 +249,14 @@ struct AccountSettingsTab: View {
             }
         } message: {
             Text(t("settings.account.clearCacheAlertMessage"))
+        }
+        .alert(t("settings.account.resetMirrorAlertTitle"), isPresented: $showResetMirrorAlert) {
+            Button(t("general.cancel"), role: .cancel) {}
+            Button(t("settings.account.resetMirrorConfirm"), role: .destructive) {
+                Task { await core.resetLocalMirror() }
+            }
+        } message: {
+            Text(t("settings.account.resetMirrorAlertMessage"))
         }
     }
 

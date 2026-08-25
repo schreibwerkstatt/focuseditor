@@ -121,6 +121,15 @@ final class AppCore: ObservableObject {
         bridge.onPageOpened = { [weak sync] pid in
             Task { await sync?.pullPage(pageId: pid) }
         }
+        // Sync-Basis setzen, wenn `fetchAndMirror` eine Seite vom Server holt.
+        // Verhindert den Deadlock: Seite im Store (via fetchAndMirror) + Outbox-
+        // Eintrag → Pull überspringt → Basis würde nie gesetzt → Push überspringt
+        // ewig. Nur wirksam, wenn noch keine Basis existiert (idempotent).
+        // Das serverHtml wird direkt übergeben (nicht aus dem Store gelesen),
+        // weil bei `applied == false` der Store das lokale HTML hält.
+        bridge.onSetSyncBase = { [weak sync] pageId, serverUpdatedAt, serverHtml in
+            await sync?.setSyncBase(pageId: pageId, serverUpdatedAt: serverUpdatedAt, html: serverHtml)
+        }
         // Lektorats-Job: der Server prüft den SERVER-Stand der Seite → vor dem
         // Anlegen den offenen Draft sichern (Bridge) und pushen (Sync), sonst
         // lektoriert er einen veralteten Text. Genau die ⌘S-Semantik, nur

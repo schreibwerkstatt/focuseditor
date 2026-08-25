@@ -97,4 +97,20 @@ extension AppCore {
         boundSlug = ServerNamespace.currentSlug
     }
 
+    /// Lokalen Spiegel manuell zurücksetzen (auf Nutzerwunsch): Alle lokalen
+    /// Inhalte (Seiten, Outbox, Sync-Zustand) verwerfen und frisch vom Server
+    /// neu aufbauen. Nützlich bei Sync-Problemen (z. B. verwaiste Seiten, die
+    /// nicht mehr pushbar sind). Bewusst NICHT automatisch — Datenverlust-Schutz
+    /// gilt auch hier: Der Nutzer muss explizit bestätigen.
+    ///
+    /// Ablauf wie `purgeLocalDataForCurrentServer`, aber ohne Konto-Löschung.
+    /// Der Sync baut den Spiegel beim nächsten Tick frisch aus dem Server auf.
+    func resetLocalMirror() async {
+        await sync.suspendForServerSwitch()
+        lektorat.reset()
+        writingTime.reset()
+        LocalDataPurge.purgeServerNamespace()
+        await rebindStoresToCurrentServer(context: "Lokaler Spiegel-Reset")
+    }
+
 }

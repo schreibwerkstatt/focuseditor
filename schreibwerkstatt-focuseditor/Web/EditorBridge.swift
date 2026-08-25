@@ -152,6 +152,15 @@ final class EditorBridge: NSObject, WKScriptMessageHandlerWithReply, EditorCoord
     /// sichtbaren Hinweis mit dem Rückweg ⌘⇧Z (gesetzt von `AppCore` →
     /// `LibraryStore`). Inhalte werden nie angetastet.
     var onHistoryEdit: ((Bool, Int) -> Void)?
+    /// Sync-Basis für eine Seite setzen (pageId, serverUpdatedAt, serverHtml).
+    /// Wird von `fetchAndMirror` aufgerufen, wenn es eine Seite vom Server holt.
+    /// Das serverHtml wird direkt übergeben (nicht aus dem Store gelesen), weil
+    /// bei `applied == false` (Outbox blockiert) der Store das lokale HTML hält,
+    /// nicht das Server-HTML — der Merge-Ancestor muss aber der Server-Stand sein.
+    /// Verhindert den Deadlock: ohne Basis würde der Push die Seite ewig
+    /// überspringen, während der Pull sie ebenfalls überspringt (Outbox-Eintrag).
+    /// Gesetzt von `AppCore` → `SyncEngine.setSyncBase`.
+    var onSetSyncBase: ((String, String, String) async -> Void)?
 
     /// Seiten mit ungespeicherten Editor-Änderungen. Der Editor hält immer genau
     /// EINE Seite offen → der Set enthält höchstens die offene Seite (s.

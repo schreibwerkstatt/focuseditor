@@ -629,6 +629,127 @@ final class SyncEngineTests: XCTestCase {
                        "Status = offline (reachability nie gestartet → isOnline=false)")
     }
 
+    /// `setSyncBase` setzt die Basis nur, wenn noch keine existiert (idempotent).
+    /// Verhindert den Deadlock: Seite via `fetchAndMirror` im Store + Outbox-
+    /// Eintrag → Pull überspringt → Basis würde nie gesetzt → Push überspringt
+    /// ewig.
+    func testSetSyncBaseSetsBaseOnlyWhenMissing() async throws {
+        let store = FakeStore()
+        let engine = makeEngine(store: store)
+        let pageId = "123"
+        let serverUpdatedAt = "2026-08-25T12:00:00Z"
+        let html = "<p data-bid=\"b1\">Test</p>"
+
+        // Seite im Store anlegen (simuliert fetchAndMirror).
+        _ = try await store.save(id: pageId, html: html, baseUpdatedAt: nil)
+
+        // Noch keine Basis → setSyncBase muss sie setzen.
+        XCTAssertNil(engine.stateStore.state.serverBaseISO[pageId])
+        await engine.setSyncBase(pageId: pageId, serverUpdatedAt: serverUpdatedAt, html: html)
+        XCTAssertEqual(engine.stateStore.state.serverBaseISO[pageId], serverUpdatedAt)
+        let ancestor = try await store.serverBaseHtml(id: pageId)
+        XCTAssertEqual(ancestor, html)
+
+        // Basis existiert bereits → setSyncBase darf sie NICHT überschreiben.
+        let differentUpdatedAt = "2026-08-25T13:00:00Z"
+        let differentHtml = "<p data-bid=\"b1\">Other</p>"
+        await engine.setSyncBase(pageId: pageId, serverUpdatedAt: differentUpdatedAt, html: differentHtml)
+        XCTAssertEqual(engine.stateStore.state.serverBaseISO[pageId], serverUpdatedAt,
+                       "vorhandene Basis darf nicht überschrieben werden")
+        let ancestorAfter = try await store.serverBaseHtml(id: pageId)
+        XCTAssertEqual(ancestorAfter, html, "vorhandener Ancestor darf nicht überschrieben werden")
+    }
+
+    /// Deadlock-Fix: `setSyncBase` setzt die Basis auch, wenn ein Outbox-Eintrag
+    /// existiert (`applied == false` in `fetchAndMirror`). Das serverHtml wird
+    /// als Merge-Ancestor gesetzt (nicht das lokale HTML aus dem Store), weil
+    /// der 3-Wege-Merge den Server-Stand als Basis braucht.
+    func testSetSyncBaseWithOutboxEntry() async throws {
+        let store = FakeStore()
+        let engine = makeEngine(store: store)
+        let pageId = "456"
+        let serverUpdatedAt = "2026-08-25T12:00:00Z"
+        let localHtml = "<p data-bid=\"b1\">Lokal geändert</p>"
+        let serverHtml = "<p data-bid=\"b1\">Server-Stand</p>"
+
+        // Seite im Store + Outbox-Eintrag (simuliert `applied == false`).
+        _ = try await store.save(id: pageId, html: localHtml, baseUpdatedAt: nil)
+        let pending = try await store.pendingOutbox()
+        XCTAssertNotNil(pending.first { $0.pageId == pageId })
+
+        // Basis setzen mit dem SERVER-HTML (nicht dem lokalen).
+        await engine.setSyncBase(pageId: pageId, serverUpdatedAt: serverUpdatedAt, html: serverHtml)
+
+        // ISO-Basis gesetzt → Push kann arbeiten.
+        XCTAssertEqual(engine.stateStore.state.serverBaseISO[pageId], serverUpdatedAt)
+        // Merge-Ancestor = Server-HTML (nicht das lokale HTML).
+        let ancestor = try await store.serverBaseHtml(id: pageId)
+        XCTAssertEqual(ancestor, serverHtml, "Merge-Ancestor muss der Server-Stand sein, nicht das lokale HTML")
+        // Lokaler Inhalt bleibt unangetastet (Datenverlust-Schutz).
+        let localPage = try await store.page(id: pageId)
+        XCTAssertEqual(localPage?.html, localHtml, "lokaler Inhalt darf nicht überschrieben werden")
+    }
+
+    /// `repairStalledSyncBases` repariert den Deadlock: Seite im Store + Outbox-
+    /// Eintrag, aber keine `serverBaseISO` → Push/Pull überspringen ewig. Holt
+    /// den Server-Stand und setzt die Basis, damit der nächste Push läuft.
+    func testRepairStalledSyncBasesSetsBaseForDeadlockedPage() async throws {
+        let store = FakeStore()
+        let pageId = "42"
+        let serverUpdatedAt = "2026-08-25T14:00:00.000Z"
+        let serverHtml = "<p data-bid=\"b1\">Server-Stand</p>"
+        let bookId = 7
+
+        // Seite im Store anlegen (simuliert fetchAndMirror) — MIT Buch (keine Waise).
+        _ = try await store.save(id: pageId, html: "<p>lokal</p>", baseUpdatedAt: nil)
+        try await store.assignBook(pageId: pageId, bookId: bookId, chapterId: nil)
+
+        let engine = makeEngine(store: store)
+        // KEINE serverBaseISO gesetzt → simuliert den Deadlock.
+        XCTAssertNil(engine.stateStore.state.serverBaseISO[pageId])
+
+        // Stub für GET /content/pages/:id — HTML-Anführungszeichen als \" im JSON.
+        let escapedHtml = serverHtml.replacingOccurrences(of: "\"", with: "\\\"")
+        let stubbedJson = #"{"id":42,"updated_at":"\#(serverUpdatedAt)","html":"\#(escapedHtml)","book_id":\#(bookId)}"#
+        router.on("GET", "/content/pages/\(pageId)", [push(200, stubbedJson)])
+
+        await engine.repairStalledSyncBases()
+
+        // Basis muss gesetzt sein.
+        XCTAssertEqual(engine.stateStore.state.serverBaseISO[pageId], serverUpdatedAt)
+        let ancestor = try await store.serverBaseHtml(id: pageId)
+        XCTAssertEqual(ancestor, serverHtml)
+    }
+
+    /// `repairStalledSyncBases` überspringt Seiten, die bereits eine Basis haben
+    /// (idempotent) und Waisen ohne Buch (die werden vom Push als Konflikt erfasst).
+    func testRepairStalledSyncBasesSkipsExistingBaseAndOrphans() async throws {
+        let store = FakeStore()
+        let engine = makeEngine(store: store)
+
+        // Seite MIT Basis → darf nicht angerührt werden.
+        let withBase = "100"
+        _ = try await store.save(id: withBase, html: "<p>ok</p>", baseUpdatedAt: nil)
+        engine.stateStore.mutate { $0.serverBaseISO[withBase] = base }
+        try await store.assignBook(pageId: withBase, bookId: 1, chapterId: nil)
+
+        // Waise (kein Buch) → darf nicht angerührt werden.
+        let orphan = "200"
+        _ = try await store.save(id: orphan, html: "<p>waise</p>", baseUpdatedAt: nil)
+        // KEIN assignBook → bookId bleibt nil
+
+        // Stub für beide — keiner darf aufgerufen werden.
+        router.on("GET", "/content/pages/\(withBase)", [push(200, #"{"id":100,"updated_at":"2026-01-01T00:00:00Z"}"#)])
+        router.on("GET", "/content/pages/\(orphan)", [push(200, #"{"id":200,"updated_at":"2026-01-01T00:00:00Z"}"#)])
+
+        await engine.repairStalledSyncBases()
+
+        // Basis der ersten Seite unverändert.
+        XCTAssertEqual(engine.stateStore.state.serverBaseISO[withBase], base)
+        // Waise hat immer noch keine Basis.
+        XCTAssertNil(engine.stateStore.state.serverBaseISO[orphan])
+    }
+
     // MARK: Helfer
 
     /// Setzt die bekannten Buch-IDs und unterdrückt den `/content/books`-Refresh

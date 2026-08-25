@@ -14,6 +14,44 @@ import OSLog
 
 extension SyncEngine {
 
+    /// Repariert Seiten im Sync-Deadlock: Outbox-Eintrag vorhanden, aber keine
+    /// `serverBaseISO` → Push überspringt ("noch nicht gepullt"), Pull überspringt
+    /// (Outbox-Eintrag → Datenverlust-Schutz). Holt den Server-Stand dieser Seiten
+    /// und setzt die Basis, damit der nächste Push gegen eine gültige Basis läuft.
+    ///
+    /// Läuft zu Beginn jedes `syncNow`-Durchlaufs VOR `pushOutbox()`. Idempotent:
+    /// setzt nur, wenn noch keine Basis existiert. Seiten ohne Buch (Waisen) werden
+    /// übersprungen — die erfasst der Push-Pfad als Konflikt.
+    func repairStalledSyncBases() async {
+        let entries: [OutboxEntry]
+        do {
+            entries = try await store.pendingOutbox()
+        } catch {
+            log.error("repairStalledSyncBases: Outbox-Lesefehler: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        for entry in entries {
+            // Nur Seiten ohne Basis reparieren (idempotent).
+            guard stateStore.state.serverBaseISO[entry.pageId] == nil else { continue }
+            // Seite ohne Buch → Waise, wird vom Push-Pfad als Konflikt erfasst.
+            guard let stored = try? await store.page(id: entry.pageId),
+                  stored.bookId != nil else { continue }
+            // Server-Stand holen.
+            guard let encodedId = entry.pageId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let resp = try? await reachableSend({
+                      try await api.send("/content/pages/\(encodedId)",
+                                         method: .GET,
+                                         decode: PushResponse.self)
+                  }),
+                  let html = resp.html else {
+                continue
+            }
+            // Basis setzen (idempotent: nur wenn noch keine existiert).
+            await setSyncBase(pageId: entry.pageId, serverUpdatedAt: resp.updated_at, html: html)
+            log.info("Sync-Deadlock repariert (Basis nachgesetzt): \(entry.pageId, privacy: .public)")
+        }
+    }
+
     func pushOutbox() async throws {
         let entries = try await store.pendingOutbox()
         let now = Date()

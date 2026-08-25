@@ -299,6 +299,23 @@ final class SyncEngine: ObservableObject {
         }
     }
 
+    /// Setzt die Sync-Basis (ISO + Merge-Ancestor) für eine Seite, die bereits
+    /// im LocalStore liegt, aber noch keine Basis hat. Notwendig, wenn die Seite
+    /// über `fetchAndMirror` (Bridge-Nachladen) in den Store kam — dieser Pfad
+    /// schreibt den Inhalt, aber setzte früher keine Basis. Ohne Basis würde der
+    /// Push die Seite ewig überspringen ("keine Server-Basis, noch nicht gepullt"),
+    /// während der Pull sie ebenfalls überspringt (Outbox-Eintrag vorhanden) —
+    /// ein Deadlock.
+    ///
+    /// Nur wirksam, wenn die Seite noch KEINE Basis hat (idempotent: setzt keine
+    /// vorhandene Basis zurück). Wird von `EditorBridge.onSetSyncBase` aufgerufen.
+    func setSyncBase(pageId: String, serverUpdatedAt: String, html: String) async {
+        guard stateStore.state.serverBaseISO[pageId] == nil else { return }
+        try? await store.setServerBaseHtml(html, id: pageId)
+        stateStore.mutate { $0.serverBaseISO[pageId] = serverUpdatedAt }
+        log.info("Sync-Basis nachgesetzt (fetchAndMirror): \(pageId, privacy: .public)")
+    }
+
     /// Gezielter Einzelseiten-Pull beim ÖFFNEN einer Seite („sicherheitshalber"):
     /// holt sofort den frischen Server-Stand genau dieser Seite, statt aufs
     /// Poll-Intervall (~5 s) zu warten — und unabhängig von Pause/manuellem Modus
@@ -429,6 +446,7 @@ final class SyncEngine: ObservableObject {
         }
 
         do {
+            await repairStalledSyncBases()
             try await pushOutbox()
             try await pullDeltas()
             await reconcileDeletesIfDue()

@@ -242,10 +242,13 @@ extension EditorBridge {
     /// kommt aber sonst nur aus dem Spiegel. Ohne API/offline → der lokale
     /// (ggf. leere) Stand; der nächste Pull holt die Seite regulär nach.
     ///
-    /// Setzt KEINE Sync-Basis (`serverBaseISO` führt die SyncEngine) — reines
-    /// Anzeige-Nachladen; der Pull-Tick erfasst die Basis ohnehin. Verwirft NIE
-    /// eine lokal anhängige Änderung (Datenverlust-Schutz): liegt für die Seite
-    /// ein Outbox-Eintrag vor, bleibt der lokale Stand unangetastet.
+    /// Setzt die Sync-Basis (`serverBaseISO` + `serverBaseHtml`), damit der
+    /// nächste Push gegen eine gültige Basis läuft. Ohne Basis würde der Push
+    /// die Seite ewig überspringen ("keine Server-Basis, noch nicht gepullt"),
+    /// während der Pull sie ebenfalls überspringt (Outbox-Eintrag vorhanden) —
+    /// ein Deadlock. Verwirft NIE eine lokal anhängige Änderung (Datenverlust-
+    /// Schutz): liegt für die Seite ein Outbox-Eintrag vor, bleibt der lokale
+    /// Stand unangetastet.
     private func fetchAndMirror(pageId: String) async -> StoredPage? {
         guard let api else { return nil }
         if let pending = try? await store.pendingOutbox(),
@@ -276,10 +279,21 @@ extension EditorBridge {
         // in derselben Transaktion wie der Write, wie der Sync-Pull): liegt nun eine
         // lokale Änderung vor, bleibt sie unangetastet und wir liefern den lokalen
         // Stand zurück (der Push/409-Merge löst die Divergenz auf).
-        _ = try? await store.applyServerPageIfClean(id: pageId, html: html,
-                                                    pageName: resp.name,
-                                                    bookId: resp.book_id, chapterId: resp.chapter_id,
-                                                    serverUpdatedAtMillis: ms)
+        let applied = try? await store.applyServerPageIfClean(id: pageId, html: html,
+                                                              pageName: resp.name,
+                                                              bookId: resp.book_id, chapterId: resp.chapter_id,
+                                                              serverUpdatedAtMillis: ms)
+        // Sync-Basis setzen (Merge-Ancestor + ISO-Basis), damit der nächste Push
+        // gegen eine gültige Basis läuft. Bei `applied == true` steht das HTML
+        // bereits im Store; bei `applied == false` (Outbox blockiert) muss das
+        // Server-HTML direkt übergeben werden — der Store hält sonst das lokale
+        // HTML, und der Merge-Ancestor würde falsch gesetzt.
+        // Verhindert den Deadlock: Outbox-Eintrag vorhanden → Pull überspringt →
+        // Basis würde nie gesetzt → Push überspringt ewig (keine serverBaseISO).
+        if applied == true {
+            try? await store.setServerBaseHtml(html, id: pageId)
+        }
+        await onSetSyncBase?(pageId, resp.updated_at, html)
         return try? await store.page(id: pageId)
     }
 }
