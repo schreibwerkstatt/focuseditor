@@ -11,7 +11,7 @@
 // Build-Nummer optional je Build hochzählen.
 
 MARKETING_VERSION = 3.22
-CURRENT_PROJECT_VERSION = 44
+CURRENT_PROJECT_VERSION = 45
 
 // Demo-Zugang (SW_DEMO_HOST/SW_DEMO_TOKEN) — optionaler Include: die Datei ist
 // gitignored (enthält ein Device-Token). Fehlt sie, bleibt der Demo-Knopf im
