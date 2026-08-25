@@ -18,6 +18,20 @@ Zwei Regeln, damit der Text stimmt:
 Die Erstversion braucht keinen Text — Apple zeigt „Neue Funktionen“ erst ab dem
 ersten Update und lässt das Feld dort leer.
 
+## 3.23 · Deutsch (max. 4000)
+
+```
+• Sync-Verbesserung: Seiten, die beim Öffnen nachgeladen wurden, werden jetzt zuverlässig synchronisiert
+• Einstellungen ▸ Konto: „Lokalen Spiegel zurücksetzen" baut den lokalen Speicher frisch vom Server auf — hilfreich, wenn der Sync mal hakt
+```
+
+## 3.23 · English (max 4000)
+
+```
+• Sync improvement: pages loaded on demand are now synced reliably
+• Settings ▸ Account: "Reset local mirror" rebuilds the local storage fresh from the server — helpful when sync gets stuck
+```
+
 ## 3.22 · Deutsch (max. 4000)
 
 ```
