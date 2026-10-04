@@ -93,3 +93,9 @@ xcodebuild -scheme schreibwerkstatt-focuseditor -configuration Debug build
 ## Weitere Dokumentation
 
 Architektur, Bridge-Vertrag (JS ⇄ Swift), Server-Schnittstelle und Sync-Semantik sind ausführlich in [CLAUDE.md](CLAUDE.md) dokumentiert.
+
+## Lizenz
+
+**GNU Affero General Public License v3.0** (AGPL-3.0), wie das [Mutterprojekt](https://github.com/schreibwerkstatt/schreibwerkstatt) – siehe [LICENSE](LICENSE).
+
+Abhängigkeiten: [GRDB.swift](https://github.com/groue/GRDB.swift) (MIT), [Sparkle](https://github.com/sparkle-project/Sparkle) (MIT, nur DMG-Build).
