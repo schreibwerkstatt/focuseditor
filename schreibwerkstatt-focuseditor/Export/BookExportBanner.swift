@@ -6,8 +6,9 @@
 //  Lektorats-Banner (gleiche Höhe, gleiche Kanten), damit der Stapel aus
 //  Save-Fehler / Lektorat / Widerrufen / Export eine Linie hält.
 //
-//  Die Meldung nennt bewusst die Zahl der Seiten OHNE lokalen Text: ein Export
-//  mit Lücken darf nicht wie ein vollständiges Backup aussehen (s. BookExport).
+//  Die Meldung nennt bewusst die Zahl der Seiten, deren lokaler Stand den
+//  Server noch nicht erreicht hat: ein Export mit Lücken darf nicht wie ein
+//  vollständiges Backup aussehen (s. BookExportController).
 //
 
 import SwiftUI
@@ -43,18 +44,18 @@ struct BookExportBanner: View {
 
     private var title: String {
         switch export.phase {
-        case .done(_, let pages, let missing):
-            let base = tn(pages, "export.bannerPages")
-            return missing == 0 ? base : base + " · " + tn(missing, "export.bannerMissing")
+        case .done(_, let unsynced):
+            let base = t("export.bannerDone")
+            return unsynced == 0 ? base : base + " · " + tn(unsynced, "export.bannerUnsynced")
         case .failed(let message):
             return message
-        case .idle, .collecting:
+        case .idle, .exporting:
             return ""
         }
     }
 
     private var detail: String? {
-        guard case .done(let url, _, _) = export.phase else { return nil }
+        guard case .done(let url, _) = export.phase else { return nil }
         return url.path(percentEncoded: false)
     }
 }

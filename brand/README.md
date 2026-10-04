@@ -5,7 +5,7 @@ damit Icon-/Logo-/Font-Generierung ohne Zugriff aufs Hauptrepo möglich ist.
 
 ## Herkunft (Single Source of Truth)
 
-Originale liegen im Hauptrepo `bedeberger/schreibwerkstatt`:
+Originale liegen im Hauptrepo `schreibwerkstatt/schreibwerkstatt`:
 
 | Datei hier                          | Quelle im Hauptrepo                          |
 |-------------------------------------|----------------------------------------------|

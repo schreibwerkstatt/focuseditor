@@ -16,7 +16,7 @@
 # Umgebungsvariablen:
 #   VERSION   optional — ueberschreibt die aus dem .app-Bundle gelesene Version.
 #             Daraus wird der Release-Tag "v<VERSION>" gebildet.
-#   REPO      Default: bedeberger/schreibwerkstatt-focuseditor
+#   REPO      Default: schreibwerkstatt/focuseditor
 #   NOTES     optional — Release-Notiz-Text. Ohne Wert: --generate-notes.
 
 set -euo pipefail
@@ -24,7 +24,7 @@ set -euo pipefail
 DMG_PATH="${1:?Pfad zum notarisierten .dmg angeben}"
 [[ -f "$DMG_PATH" ]] || { echo "FEHLER: .dmg nicht gefunden: $DMG_PATH" >&2; exit 1; }
 
-REPO="${REPO:-bedeberger/schreibwerkstatt-focuseditor}"
+REPO="${REPO:-schreibwerkstatt/focuseditor}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- Sparkle generate_appcast finden -----------------------------------------

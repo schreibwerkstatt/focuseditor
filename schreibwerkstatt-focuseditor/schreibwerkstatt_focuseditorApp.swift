@@ -385,12 +385,12 @@ private struct PageMenuCommands: View {
 
         Divider()
 
-        // Buch als Markdown sichern — aus dem lokalen Spiegel, geht also auch
-        // offline. BEWUSST OHNE Tastenkürzel: das naheliegende ⌘⇧E gehört der
+        // Buch als Markdown sichern — Server-Export (online-only), vorher wird
+        // gesichert + gepusht (s. BookExportController). BEWUSST OHNE Tastenkürzel: das naheliegende ⌘⇧E gehört der
         // Fokus-Umschaltung im Editor, und ein Menü-Kürzel würde ihr die Taste
         // vor der WebView wegnehmen. Ein seltener Befehl ist das nicht wert.
         Button(t("menu.exportBook")) {
-            bookExport.exportActiveBook { await bridge.flushDraftSave() }
+            bookExport.exportActiveBook()
         }
         .disabled(!bookExport.canExport)
 
@@ -542,8 +542,8 @@ enum AboutPanel {
         line(t("about.body"))
         line(" ")
         line(t("about.motherProject"), font: bold)
-        link("github.com/bedeberger/schreibwerkstatt",
-             "https://github.com/bedeberger/schreibwerkstatt")
+        link("github.com/schreibwerkstatt/schreibwerkstatt",
+             "https://github.com/schreibwerkstatt/schreibwerkstatt")
 
         return s
     }

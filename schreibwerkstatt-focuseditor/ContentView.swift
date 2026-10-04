@@ -99,7 +99,7 @@ private struct EditorHostView: View {
         case .export:
             switch bookExport.phase {
             case .done, .failed: return true
-            case .idle, .collecting: return false
+            case .idle, .exporting: return false
             }
         }
     }

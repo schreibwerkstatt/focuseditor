@@ -14,7 +14,7 @@ Code-Teil (zweites Target, Signierung, `.pkg`-Export) steht in
 | [../REVIEW-NOTES.md](../REVIEW-NOTES.md) | App-Prüfungsinformationen (Demo-Zugang, 2.5.2) |
 | [screenshots/de/](screenshots/de/) · [screenshots/en/](screenshots/en/) | Screenshots, je 4 Stück, 2880×1800 |
 
-## Stand in App Store Connect (per API geprüft, 2026-08-17)
+## Stand in App Store Connect (per API geprüft, 2026-10-04)
 
 **Die App ist im Mac App Store veröffentlicht.** App-ID `6797073919`, SKU
 `SWK-FOCUSEDITOR-MAC`, Primärsprache de-DE, Kategorien Produktivität + Bücher,
@@ -22,20 +22,11 @@ Altersfreigabe 4+, Inhalte Dritter deklariert (`USES_THIRD_PARTY_CONTENT`).
 
 | Version | Build | Zustand |
 |---|---|---|
-| **3.20** | 42 (hochgeladen 2026-08-16) | `READY_FOR_SALE`, ladbar — die Erstveröffentlichung, nach drei Review-Runden |
-| **3.21** | 43 (hochgeladen 2026-08-17) | angelegt, aber **nie eingereicht** — Inhalt steckt in 3.22 |
-| **3.22** | 44 (hochgeladen 2026-08-22) | Version im Browser anzulegen, Build zuzuordnen, „Neue Funktionen“ aus [whats-new.md](whats-new.md) |
-
-Was am offenen Version-Record noch fehlt (alles nur im Browser zu erledigen, s. u.):
-
-| | Stand |
-|---|---|
-| Texte de + en | **drin** — Beschreibung, Keywords, Support-URL sind aus 3.20 übernommen und stimmen mit den Listing-Dateien überein |
-| Screenshots de + en | **drin** — je vier im Set `APP_DESKTOP` |
-| „Neue Funktionen“ de + en | **fehlt** — Text steht kopierfertig in [whats-new.md](whats-new.md) (Abschnitt 3.22) |
-| Build 44 | mit `/release` hochgeladen (2026-08-22), Zuordnung im Browser offen |
-| Promotional Text | leer in beiden Sprachen (optional; Wortlaut in den Listing-Dateien) |
-| Marketing-URL `en` | leer (in `de` gesetzt) |
+| 3.20 | 42 | `READY_FOR_SALE` — die Erstveröffentlichung, nach drei Review-Runden |
+| 3.21 | 43 | `READY_FOR_SALE` |
+| 3.22 | 44 | `READY_FOR_SALE` |
+| **3.23** | 45 | `READY_FOR_SALE` — zuletzt veröffentlicht |
+| **3.24** | 46 (hochgeladen 2026-10-04) | Version im Browser anzulegen, Build zuzuordnen, „Neue Funktionen“ aus [whats-new.md](whats-new.md) |
 
 Mit dem vorhandenen API-Schlüssel (Rolle *Developer*) **lesbar**: Versionen,
 Builds, Localizations, Kategorien, Altersfreigabe — daher die Tabellen oben.

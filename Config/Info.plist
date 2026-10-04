@@ -43,7 +43,7 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>SUFeedURL</key>
-	<string>https://github.com/bedeberger/schreibwerkstatt-focuseditor/releases/latest/download/appcast.xml</string>
+	<string>https://github.com/schreibwerkstatt/focuseditor/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>/6jFcMB0tcVGUfKEFFnBKQJ+cUNgn341D23iRMFjk68=</string>
 	<key>SUEnableInstallerLauncherService</key>

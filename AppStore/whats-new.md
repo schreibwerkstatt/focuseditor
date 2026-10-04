@@ -18,6 +18,22 @@ Zwei Regeln, damit der Text stimmt:
 Die Erstversion braucht keinen Text — Apple zeigt „Neue Funktionen“ erst ab dem
 ersten Update und lässt das Feld dort leer.
 
+## 3.24 · Deutsch (max. 4000)
+
+```
+• „Buch exportieren …“ erzeugt die Markdown-Datei jetzt mit demselben Export wie die Web-App — gleiche Formatierung, egal wo du exportierst
+• Vor dem Export werden deine letzten Änderungen gesichert und hochgeladen; Seiten, deren Änderungen noch nicht synchronisiert werden konnten, nennt der Hinweis nach dem Export ausdrücklich
+• Der Export braucht dafür eine Verbindung zum Server — ohne Netz erscheint eine klare Meldung, bevor du einen Speicherort wählst
+```
+
+## 3.24 · English (max 4000)
+
+```
+• “Export Book …” now creates the Markdown file with the same export as the web app — identical formatting wherever you export
+• Before exporting, your latest changes are saved and uploaded; pages whose changes could not be synced yet are named explicitly in the notice after the export
+• Exporting therefore needs a connection to the server — without one you get a clear message before choosing where to save
+```
+
 ## 3.23 · Deutsch (max. 4000)
 
 ```

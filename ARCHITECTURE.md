@@ -56,7 +56,7 @@ Die **EditorBridge** ist die einzige Naht zwischen WebView und Swift-Kern.
 | 5 | `LibraryStore` | content, store, bridge | Buch-/Seitenauswahl-State |
 | 6 | `EditorBundleStore` | auth.api | OTA-Bundle-Download/Cache |
 | 7 | `SyncEngine` | auth.api, content, store | Poll/Push/Pull; danach `sync.editor = bridge` (Rückkopplung) |
-| 8 | `BookExportController` | store, library | Buch als Markdown sichern (aus dem lokalen Spiegel, offline-fähig) |
+| 8 | `BookExportController` | auth.api, store, library | Buch als Markdown sichern (Server-Export `GET /export/book/:id/md`, online-only; Vorlauf Flush + Sync) |
 | 9 | `PageAdminController` | auth.api, store, library | Seiten anlegen/umbenennen/löschen (online, `POST`/`PUT`/`DELETE /content/pages`) |
 | 10 | `PageRevisionStore` | auth.api | frühere Fassungen der offenen Seite (Liste/Vorschau/Restore) |
 
@@ -325,7 +325,7 @@ Kopplungspunkt:
 |---|---|---|
 | Seiten anlegen/umbenennen/löschen ([PageAdminController](schreibwerkstatt-focuseditor/Library/PageAdminController.swift)) | Swift → Server → `store` → `library.refreshPages()` | Verwaltung von Datensätzen, kein Editor-Inhalt. Die offene Seite wird nur beim Löschen berührt (`library.closePage()`). |
 | Frühere Fassungen ([PageRevisionStore](schreibwerkstatt-focuseditor/Revisions/PageRevisionStore.swift)) | Swift → Server; nach Restore `sync.pullPage` | Der Server schreibt die alte Fassung zurück; die WebView erfährt es über den ganz normalen Open-Page-Pull (saubere Seite → stiller Reload). Ein eigener Weg in die WebView wäre ein zweiter Reload-Pfad neben `serverUpdate`. |
-| Buch-Export ([Export/](schreibwerkstatt-focuseditor/Export/)) | `store` → Markdown → `NSSavePanel` | Liest nur den lokalen Spiegel. Einzige Berührung: der Draft-Flush vor dem Sammeln (`bridge.flushDraftSave`), sonst fehlte der eben getippte Satz. |
+| Buch-Export ([Export/](schreibwerkstatt-focuseditor/Export/)) | Swift → Server (`GET /export/book/:id/md`) → `NSSavePanel` | Der Server exportiert seinen eigenen Stand. Darum vorher `prepare` = `bridge.flushDraftSave()` + `sync.syncNow(manual:)`; was danach noch in der Outbox (`store`) liegt, weist das Banner als ungesynct aus. |
 
 Gemeinsames Muster: **Server-Erfolg zuerst, lokale Wirkung danach.** Beim Löschen
 ist das der Unterschied zwischen „Text weg, Seite lebt am Server weiter" und

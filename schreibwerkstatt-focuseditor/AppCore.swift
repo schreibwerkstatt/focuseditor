@@ -138,7 +138,11 @@ final class AppCore: ObservableObject {
             await bridge?.flushDraftSave()
             await sync?.syncNow(manual: true)
         }
-        self.bookExport = BookExportController(store: store, library: library)
+        // Buch-Export: der Server exportiert seinen Stand → derselbe Vorlauf.
+        self.bookExport = BookExportController(api: auth.api, store: store, library: library) { [weak bridge, weak sync] in
+            await bridge?.flushDraftSave()
+            await sync?.syncNow(manual: true)
+        }
         self.pageAdmin = PageAdminController(api: auth.api, store: store, library: library)
         self.revisions = PageRevisionStore(api: auth.api)
         self.accountDeletion = AccountDeletionController(api: auth.api)

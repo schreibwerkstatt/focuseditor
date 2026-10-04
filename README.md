@@ -1,6 +1,8 @@
 # schreibwerkstatt-focuseditor
 
-Nativer **macOS-Client** für den Focus-Editor der [Schreibwerkstatt](https://github.com/bedeberger/schreibwerkstatt). Eine SwiftUI/AppKit-Shell mit `WKWebView`, die ein lokal gecachtes Build des bestehenden Focus-Editors lädt — voll offline-fähig, ablenkungsfrei, genau eine Seite.
+Nativer **macOS-Client** für den Focus-Editor der [Schreibwerkstatt](https://github.com/schreibwerkstatt/schreibwerkstatt). Eine SwiftUI/AppKit-Shell mit `WKWebView`, die ein lokal gecachtes Build des bestehenden Focus-Editors lädt — voll offline-fähig, ablenkungsfrei, genau eine Seite.
+
+[![Download on the Mac App Store](https://img.shields.io/badge/Download-on_the_Mac_App_Store-blue.svg)](https://apps.apple.com/app/id6797073919)
 
 > **Zweck:** ablenkungsfreies Schreiben auf einer Seite. Kein Buchorganizer, keine Analyse-Karten, keine KI-Jobs — nur der Schreibmodus.
 
@@ -29,7 +31,7 @@ AppKit/SwiftUI-Shell
         schreibwerkstatt-Server  (Express, Port 3737 / NGINX HTTPS)
 ```
 
-Der Editor-Code wird **nicht geforkt**. Bei Editor-Bugs/-Features: Fix gehört ins [Hauptrepo](https://github.com/bedeberger/schreibwerkstatt) — der nächste Client-Start zieht das aktualisierte Bundle automatisch (ETag-getrieben). Hier liegt nur Bridge + Shell + Sync + Auth + OTA-Lader.
+Der Editor-Code wird **nicht geforkt**. Bei Editor-Bugs/-Features: Fix gehört ins [Hauptrepo](https://github.com/schreibwerkstatt/schreibwerkstatt) — der nächste Client-Start zieht das aktualisierte Bundle automatisch (ETag-getrieben). Hier liegt nur Bridge + Shell + Sync + Auth + OTA-Lader.
 
 ## Projektstruktur
 

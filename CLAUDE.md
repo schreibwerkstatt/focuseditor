@@ -11,8 +11,8 @@ Die **Schreibwerkstatt** ist eine Web-Plattform zum strukturierten Schreiben von
 **Verhältnis zum Mutterprojekt:** Der Editor-Code (JS/CSS, Block-Merge) wird **nicht** kopiert, sondern zur Laufzeit als OTA-Bundle vom Server gezogen — die Schreibwerkstatt bleibt Single Source of Truth (Details unten unter „Quellprojekt"). Dieser Client liefert nur die native Hülle: Shell, Bridge, Offline-Store, Sync, Auth, OTA-Lader.
 
 **Repositories:**
-- **Mutterprojekt (Schreibwerkstatt, SSoT):** GitHub [`bedeberger/schreibwerkstatt`](https://github.com/bedeberger/schreibwerkstatt) (public) · lokal `/Users/bd/ClaudeProjects/schreibwerkstatt`
-- **Dieser Client:** GitHub `bedeberger/schreibwerkstatt-focuseditor` (private) · lokal `/Users/bd/xcode-projects/schreibwerkstatt-focuseditor`
+- **Mutterprojekt (Schreibwerkstatt, SSoT):** GitHub [`schreibwerkstatt/schreibwerkstatt`](https://github.com/schreibwerkstatt/schreibwerkstatt) (public) · lokal `/Users/bd/ClaudeProjects/schreibwerkstatt`
+- **Dieser Client:** GitHub [`schreibwerkstatt/focuseditor`](https://github.com/schreibwerkstatt/focuseditor) (public) · lokal `/Users/bd/xcode-projects/schreibwerkstatt-focuseditor`
 
 ## Quellprojekt (Single Source of Truth)
 
@@ -186,11 +186,9 @@ Warum das trotz „nur der Schreibmodus" hierher gehört: es ist der Notausgang 
 
 Bewusst **kein Diff und kein zweiter Editor** — die Ansicht beantwortet „welche Fassung will ich zurück", nicht „was genau hat sich geändert" (das wäre ein Editor-Fork). Das Wiederherstellen macht der Server (`POST …/restore` schreibt die alte Fassung als NEUE Revision zurück → selbst widerrufbar); der Client zieht danach `SyncEngine.pullPage`, was die saubere offene Seite still neu lädt. Online-only; offline zeigt die Ansicht einen Hinweis statt einer leeren Liste.
 
-### Buch exportieren (Markdown) — kein Server
+### Buch exportieren (Markdown) — `GET /export/book/:id/md`
 
-Ablage ▸ „Buch exportieren …" schreibt das aktive Buch als EINE Markdown-Datei ([Export/](schreibwerkstatt-focuseditor/Export/): `HTMLToMarkdown` (Konverter) + `BookExport` (Dokument-Zusammenbau) + `BookExportController` (Save-Panel) + `BookExportBanner`). Quelle ist **ausschliesslich der lokale Spiegel** → funktioniert offline. Vor dem Sammeln wird der offene Draft geflusht, sonst fehlte genau der eben getippte Satz.
-
-Seiten, deren Body nie gepullt wurde, werden **ausgewiesen** statt still übersprungen (Zeile im Dokument + Zahl im Banner) — dieselbe Ehrlichkeit wie das „—" im Seiten-Picker. Ein Export mit stillen Lücken sähe aus wie ein vollständiges Backup. **Bewusst ohne Tastenkürzel:** das naheliegende ⌘⇧E gehört der Fokus-Umschaltung im Editor, und ein Menü-Kürzel nähme ihr die Taste vor der WebView weg.
+Ablage ▸ „Buch exportieren …" schreibt das aktive Buch als EINE Markdown-Datei ([Export/](schreibwerkstatt-focuseditor/Export/): `BookExportController` (Server-Call + Save-Panel) + `BookExportBanner`). **Server-Export:** der Client ruft `GET /export/book/:id/md` auf (dieselben Export-Builder wie die Web-App, kein zweiter Konverter im Client) und fragt **erst danach** nach dem Zielort — offline wählt niemand eine Datei, um hinterher den Fehler zu sehen. Der Server exportiert seinen **eigenen** Stand, darum läuft vorher derselbe Vorlauf wie beim Lektorat (`prepare` = `bridge.flushDraftSave()` + `sync.syncNow(manual:)`, in `AppCore` verdrahtet); was danach noch in der Outbox liegt (409-Konflikt, Lektorats-Lock), weist das Banner als „N Seiten mit ungesyncten Änderungen“ aus, statt still einen alten Stand als vollständiges Backup auszugeben. Server-Fehler werden auf lokalisierte Sätze abgebildet (`export.error.*`). **Online-only** — bewusst aufgegeben gegenüber dem früheren lokalen Export. **Bewusst ohne Tastenkürzel:** das naheliegende ⌘⇧E gehört der Fokus-Umschaltung im Editor, und ein Menü-Kürzel nähme ihr die Taste vor der WebView weg.
 
 ### Konto löschen (in-app) — `DELETE /me/account`
 
@@ -221,7 +219,7 @@ schreibwerkstatt-focuseditor/        App-Sources (Swift)
   Writing/    WritingStatsStore (Live-Wortzahl/Lesezeit/Schreibziel/Tages-Delta) + WritingTimeTracker (Schreibzeit-Heartbeat → POST /history/writing-time)
   Conflict/   ConflictDiff (HTML→Absätze + absatzweiser Diff) + ConflictResolutionView (Nebeneinander-Sheet, informierte 409-Auflösung)
   Revisions/  PageRevisionStore (frühere Fassungen der offenen Seite: Liste/Vorschau/Restore) + RevisionsView (⌘⇧R)
-  Export/     HTMLToMarkdown (PURER Konverter, getestet) + BookExport (PURER Dokument-Zusammenbau, getestet) + BookExportController (NSSavePanel) + BookExportBanner
+  Export/     BookExportController (Server-Call + Save-Panel) + BookExportBanner
   Diagnostics/ DiagnosticsReport (PURER Zustandsbericht für Support-Anfragen; ohne Token, ohne Manuskript-Text)
   Lektorat/   LektoratJobStore (Server-Lektorat der offenen Seite: POST /jobs/check + Poll) + LektoratToolbarButton/-ResultBanner
   Update/     UpdaterController (Sparkle-Auto-Update, NUR im DMG-Target hinter `#if SPARKLE`; Config in Config/Info.plist + Config/Focuseditor.entitlements)
@@ -362,6 +360,6 @@ Store-Release (OTA-Bundle).
 - **JS-Syntax-Guard:** [WebAssetsSyntaxTests.swift](schreibwerkstatt-focuseditorTests/WebAssetsSyntaxTests.swift) schneidet die `<script>`-Blöcke aus dem generierten `index.html` (plus Bridge-Facade und Dev-Harness) und lässt `node --check` darüberlaufen. Der Glue ist über 1000 Zeilen JavaScript in Swift-String-Literalen, die der Compiler als Text durchwinkt — ein fehlendes `}` fiel bisher erst zur Laufzeit in der WKWebView auf, und dort still. Fehlt `node`, überspringt sich der Test (Entwickler-Bequemlichkeit, kein Release-Gate).
 - **i18n-Guard:** [LocalizationCatalogTests.swift](schreibwerkstatt-focuseditorTests/LocalizationCatalogTests.swift) hält die zwei Kataloge deckungsgleich (gleiche Keys, gleiche `{param}`-Platzhalter je Key), prüft jeden literalen `t("…")`-Key im Code gegen den Katalog und verlangt zu jedem `tn(…)`/`NumberText.plural(…)` beide Plural-Formen. Ein einseitig gepflegter Key fiel sonst nur auf, wenn man die App in der Sprache benutzte (die Fallback-Kette liefert still den deutschen Text).
 
-  **Test-Target-Mitgliedschaft:** Das Bundle ist non-hosted (kein `@testable import`, s. [ARCHITECTURE.md](ARCHITECTURE.md)) — getestete App-Quellen sind explizit im pbxproj eingetragen. Aktuell zusätzlich zu den Sync-/Auth-/Web-Dateien: `WritingTimeTracker.swift`, `LibraryStore.swift`, `GRDBLocalStore.swift` (dafür hängt auch das **GRDB**-Paketprodukt am Test-Target), `PagePickerModel.swift`, `WebAssets+DevHarness.swift`, `HTMLToMarkdown.swift`, `BookExport.swift`, `DiagnosticsReport.swift`, `EditorBundleStore.swift`, `LektoratJobStore.swift`, `AccountDeletionController.swift`. Eine neue getestete Datei braucht denselben Eintrag, sonst fehlt sie im Test-Build.
+  **Test-Target-Mitgliedschaft:** Das Bundle ist non-hosted (kein `@testable import`, s. [ARCHITECTURE.md](ARCHITECTURE.md)) — getestete App-Quellen sind explizit im pbxproj eingetragen. Aktuell zusätzlich zu den Sync-/Auth-/Web-Dateien: `WritingTimeTracker.swift`, `LibraryStore.swift`, `GRDBLocalStore.swift` (dafür hängt auch das **GRDB**-Paketprodukt am Test-Target), `PagePickerModel.swift`, `WebAssets+DevHarness.swift`, `DiagnosticsReport.swift`, `EditorBundleStore.swift`, `LektoratJobStore.swift`, `AccountDeletionController.swift`. Eine neue getestete Datei braucht denselben Eintrag, sonst fehlt sie im Test-Build.
 
 **Netz-Pfade testen:** `MockURLProtocol` (in [APIClientTests.swift](schreibwerkstatt-focuseditorTests/APIClientTests.swift)) fängt alle Requests einer Test-Session ab — der `APIClient` nimmt die Session im Initializer entgegen. So laufen `EditorBundleStore` (OTA-Fehlerpfade), `LektoratJobStore` (Poll-Zyklus) und `AccountDeletionController` ohne Server. Damit das geht, sind drei Dinge injizierbar, die sonst hart verdrahtet wären: `EditorBundleStore(baseDirectory:)` (statt Application Support), `LektoratJobStore(pollInterval:maxPolls:)` (sonst liefe eine Timeout-Probe echte sechs Minuten) und `LektoratJobStore(prepare:)`. ZIP-Eingaben baut [ZipFixture.swift](schreibwerkstatt-focuseditorTests/ZipFixture.swift) von Hand (geteilt mit `MiniZipTests`) — eine fremde ZIP-Bibliothek würde die Annahme umgehen, die `MiniZip` prüfen soll.

@@ -60,8 +60,6 @@
 		7E0000000000000000000074 /* PageMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000064 /* PageMetrics.swift */; };
 		7E0000000000000000000101 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 7E0000000000000000000102 /* GRDB */; };
 		7E0000000000000000000200 /* WebAssets+DevHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000201 /* WebAssets+DevHarness.swift */; };
-		7E0000000000000000000202 /* HTMLToMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000203 /* HTMLToMarkdown.swift */; };
-		7E0000000000000000000204 /* BookExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000205 /* BookExport.swift */; };
 		7E0000000000000000000206 /* DiagnosticsReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000207 /* DiagnosticsReport.swift */; };
 		7E0000000000000000000208 /* EditorBundleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000209 /* EditorBundleStore.swift */; };
 		7E000000000000000000020A /* LektoratJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E000000000000000000020B /* LektoratJobStore.swift */; };
@@ -132,8 +130,6 @@
 		7E0000000000000000000062 /* GRDBLocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GRDBLocalStore.swift; path = "schreibwerkstatt-focuseditor/Store/GRDBLocalStore.swift"; sourceTree = SOURCE_ROOT; };
 		7E0000000000000000000106 /* Focuseditor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Focuseditor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E0000000000000000000201 /* WebAssets+DevHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WebAssets+DevHarness.swift"; path = "schreibwerkstatt-focuseditor/Web/WebAssets+DevHarness.swift"; sourceTree = SOURCE_ROOT; };
-		7E0000000000000000000203 /* HTMLToMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "HTMLToMarkdown.swift"; path = "schreibwerkstatt-focuseditor/Export/HTMLToMarkdown.swift"; sourceTree = SOURCE_ROOT; };
-		7E0000000000000000000205 /* BookExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "BookExport.swift"; path = "schreibwerkstatt-focuseditor/Export/BookExport.swift"; sourceTree = SOURCE_ROOT; };
 		7E0000000000000000000207 /* DiagnosticsReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "DiagnosticsReport.swift"; path = "schreibwerkstatt-focuseditor/Diagnostics/DiagnosticsReport.swift"; sourceTree = SOURCE_ROOT; };
 		7E0000000000000000000209 /* EditorBundleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "EditorBundleStore.swift"; path = "schreibwerkstatt-focuseditor/Web/EditorBundleStore.swift"; sourceTree = SOURCE_ROOT; };
 		7E000000000000000000020B /* LektoratJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LektoratJobStore.swift"; path = "schreibwerkstatt-focuseditor/Lektorat/LektoratJobStore.swift"; sourceTree = SOURCE_ROOT; };
@@ -189,8 +185,6 @@
 				7E000000000000000000020B /* LektoratJobStore.swift */,
 				7E0000000000000000000209 /* EditorBundleStore.swift */,
 				7E0000000000000000000207 /* DiagnosticsReport.swift */,
-				7E0000000000000000000205 /* BookExport.swift */,
-				7E0000000000000000000203 /* HTMLToMarkdown.swift */,
 				7E0000000000000000000201 /* WebAssets+DevHarness.swift */,
 				7E0000000000000000000020 /* APIClient.swift */,
 				7E0000000000000000000021 /* AuthError.swift */,
@@ -428,8 +422,6 @@
 				7E000000000000000000020A /* LektoratJobStore.swift in Sources */,
 				7E0000000000000000000208 /* EditorBundleStore.swift in Sources */,
 				7E0000000000000000000206 /* DiagnosticsReport.swift in Sources */,
-				7E0000000000000000000204 /* BookExport.swift in Sources */,
-				7E0000000000000000000202 /* HTMLToMarkdown.swift in Sources */,
 				7E0000000000000000000200 /* WebAssets+DevHarness.swift in Sources */,
 				7E0000000000000000000070 /* WritingTimeTracker.swift in Sources */,
 				7E0000000000000000000071 /* LibraryStore.swift in Sources */,
