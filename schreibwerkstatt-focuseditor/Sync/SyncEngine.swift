@@ -55,11 +55,13 @@ final class SyncEngine: ObservableObject {
     static let placeholderPageId = "default"
 
     @Published private(set) var status: Status = .idle
-    @Published private(set) var lastSyncedAt: Date?
-    @Published private(set) var lastError: String?
+    // Ohne `private(set)`: die Konflikt-Auflösung liegt in
+    // SyncEngine+Conflicts.swift und muss beide setzen (s. Hinweis unten).
+    @Published var lastSyncedAt: Date?
+    @Published var lastError: String?
     @Published private(set) var conflicts: [Conflict] = []
     /// Anzahl lokal noch nicht gepushter Seiten (Outbox) — für die Status-UI.
-    @Published private(set) var pendingCount: Int = 0
+    @Published var pendingCount: Int = 0
     /// Netzlage, gespiegelt aus dem `Reachability`-Monitor. Die UI hängt an der
     /// SyncEngine (nicht am Monitor selbst) — sonst bräuchte jede Ansicht, die
     /// nur „ist Netz da" wissen will, ein zweites ObservableObject. Bekannt
@@ -137,7 +139,31 @@ final class SyncEngine: ObservableObject {
     let maxAutoMergeRetries = 3
     var autoMergeRe409: [String: Int] = [:]
 
-    private var isRunning = false
+    /// Läuft gerade ein Durchlauf (`syncNow` oder `pullPage`)? Wird er frei,
+    /// laufen die Wartenden aus `waitUntilIdle()` weiter.
+    private var isRunning = false {
+        didSet {
+            guard !isRunning, !idleWaiters.isEmpty else { return }
+            let waiters = idleWaiters
+            idleWaiters = []
+            waiters.forEach { $0.resume() }
+        }
+    }
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Sitzungs-Generation des Spiegels. Zählt bei jedem Server-Wechsel/Spiegel-
+    /// Reset hoch; ein Durchlauf, der noch unter der alten Generation läuft, darf
+    /// danach NICHTS mehr schreiben (s. `ensureNotSuperseded`).
+    private var generation = 0
+    private var runGeneration = 0
+    /// Ist der laufende Durchlauf von einem Server-Wechsel überholt?
+    var isSuperseded: Bool { runGeneration != generation }
+    /// Server-Fehler (kein Transport-Fehler) im laufenden Durchlauf, die nur
+    /// geloggt und übersprungen wurden — damit die Status-Anzeige nicht
+    /// „synchronisiert" behauptet, während eine Seite dauerhaft scheitert.
+    var runIssues = 0
+    /// Der Store konnte nach einem Server-Wechsel nicht umgehängt werden — bis
+    /// zum nächsten erfolgreichen Wechsel wird nicht synchronisiert.
+    private var halted = false
     private var isActive = false
     private var pollTask: Task<Void, Never>?
     /// Wurde der Server im laufenden Sync-Durchlauf (transport-seitig) erreicht?
@@ -224,12 +250,43 @@ final class SyncEngine: ObservableObject {
     /// Namespace-DB committen, während `GRDBLocalStore` bereits auf die neue
     /// getauscht hat → der Write fiele für den neuen Server lautlos weg.
     /// Der Aufrufer (AppCore.switchServer) ruft danach `reloadForCurrentServer()`.
+    ///
+    /// Die Wartezeit ist gedeckelt (Serverwechsel darf nicht an einem hängenden
+    /// Request kleben). Damit ein Durchlauf, der danach noch zurückkommt, nichts
+    /// mehr in den Spiegel bzw. Sync-Zustand des NEUEN Servers schreibt (Cursor,
+    /// Basen, Seiten), zählt die Generation hoch — der alte Lauf bricht an seinem
+    /// nächsten Prüfpunkt ab (`ensureNotSuperseded`).
     func suspendForServerSwitch() async {
         stopPolling()
+        generation += 1
         var waited = 0
         while isRunning && waited < 100 {        // max. ~2 s
             try? await Task.sleep(for: .milliseconds(20))
             waited += 1
+        }
+    }
+
+    /// Der Spiegel liess sich nicht auf den neuen Server umhängen (der Store hält
+    /// weiter die DB des alten). Dann NICHT mit dem Sync-Zustand des neuen
+    /// Servers gegen die Outbox des alten pushen/pullen — Sync anhalten und den
+    /// Fehler sichtbar machen. Lokale Inhalte bleiben unangetastet.
+    func haltAfterFailedStoreSwitch() {
+        halted = true
+        stopPolling()
+        status = .idle
+        lastError = t("sync.error.storeUnavailable")
+    }
+
+    /// Wirft, wenn ein Server-Wechsel den laufenden Durchlauf überholt hat.
+    /// Gehört nach jeden Netz-Roundtrip, VOR den nächsten Schreibzugriff.
+    func ensureNotSuperseded() throws {
+        if isSuperseded { throw SyncSuperseded.serverSwitch }
+    }
+
+    /// Wartet, bis kein Durchlauf mehr läuft.
+    private func waitUntilIdle() async {
+        while isRunning {
+            await withCheckedContinuation { idleWaiters.append($0) }
         }
     }
 
@@ -240,6 +297,7 @@ final class SyncEngine: ObservableObject {
     /// danach passend neu aufsetzen.
     func reloadForCurrentServer() {
         stopPolling()
+        halted = false
         stateStore.reloadForCurrentServer()
         // Der Snapshot des Zielservers kann noch Alt-Ancestor tragen.
         Task { await migrateLegacyAncestors() }
@@ -316,6 +374,29 @@ final class SyncEngine: ObservableObject {
         log.info("Sync-Basis nachgesetzt (fetchAndMirror): \(pageId, privacy: .public)")
     }
 
+    /// Übernimmt die Basis nach einer EIGENEN Server-Aktion an der Seite (Anlegen,
+    /// Umbenennen über den `PageAdminController`), die `updated_at` bewegt hat.
+    ///  • Seite ohne Basis (gerade angelegt) → Basis + Ancestor = Server-Stand.
+    ///  • Seite mit Basis (Umbenennen) → nur die ISO nachziehen, und nur, wenn der
+    ///    Server-Body nachweislich unser Ancestor ist. Hat inzwischen jemand
+    ///    anderes den Text geändert, bliebe dessen Änderung sonst beim nächsten
+    ///    Push ohne 409 überschrieben — dann lieber den Merge-Roundtrip.
+    func adoptServerBase(pageId pid: String, serverUpdatedAt: String, serverHtml: String?) async {
+        guard stateStore.state.serverBaseISO[pid] != nil else {
+            // Ohne Basis, aber mit ungepushter Änderung → deren Basis ist
+            // unbekannt; das klärt `repairStalledSyncBases` (sonst Blind-Basis).
+            let pending = ((try? await store.pendingOutbox()) ?? []).contains { $0.pageId == pid }
+            guard !pending else { return }
+            try? await store.setServerBaseHtml(serverHtml ?? "", id: pid)
+            stateStore.mutate { $0.serverBaseISO[pid] = serverUpdatedAt }
+            return
+        }
+        guard let serverHtml,
+              let ancestor = (try? await store.serverBaseHtml(id: pid)) ?? nil,
+              ancestor == serverHtml else { return }
+        stateStore.mutate { $0.serverBaseISO[pid] = serverUpdatedAt }
+    }
+
     /// Gezielter Einzelseiten-Pull beim ÖFFNEN einer Seite („sicherheitshalber"):
     /// holt sofort den frischen Server-Stand genau dieser Seite, statt aufs
     /// Poll-Intervall (~5 s) zu warten — und unabhängig von Pause/manuellem Modus
@@ -330,8 +411,9 @@ final class SyncEngine: ObservableObject {
         // nicht gleichzeitig denselben `stateStore`/Store mutieren (Read-modify-write
         // über `await` hinweg → Basis-Race). Läuft schon ein Durchlauf, überspringen —
         // der laufende Pull erfasst die Seite ohnehin.
-        guard shouldSync(), reachability.isOnline, !isRunning else { return }
+        guard shouldSync(), !halted, reachability.isOnline, !isRunning else { return }
         isRunning = true
+        runGeneration = generation
         defer { isRunning = false }
 
         // Lokal ungepushte Änderung → nicht anfassen; die Divergenz löst der
@@ -354,7 +436,7 @@ final class SyncEngine: ObservableObject {
             log.info("Einzel-Pull \(pid, privacy: .public) übersprungen: \(error.localizedDescription, privacy: .public)")
             return
         }
-        guard let html = resp.html else { return }
+        guard !isSuperseded, let html = resp.html else { return }
 
         // Echo: gleiche Basis = kein neuer Inhalt → nicht erneut mergen/neu laden.
         let serverUpdatedAt = resp.updated_at
@@ -370,6 +452,7 @@ final class SyncEngine: ObservableObject {
         // kann in genau diese (eben geöffnete) Seite getippt haben. Outbox-Check
         // läuft atomar im Store, die Dirty-offene-Seite zusätzlich hier.
         if (editor?.openPageId == pid) && (editor?.isDirty(pid) ?? false) { return }
+        let previous = await baseSnapshot(pid)
         // bookId/chapterId liefert `GET /content/pages/:id` ggf. nicht — nil lässt
         // den vorhandenen Wert stehen (keine Waise), der Reconcile-Backfill trägt es
         // sonst über den Buch-Tree nach.
@@ -381,10 +464,9 @@ final class SyncEngine: ObservableObject {
         // ISO als Push-Basis + HTML als Merge-Ancestor mitführen (wie `pullBook`).
         try? await store.setServerBaseHtml(html, id: pid)
         stateStore.mutate { $0.serverBaseISO[pid] = serverUpdatedAt }
-        // Ist die Seite (weiterhin) sauber offen, still in der WebView neu laden.
-        if editor?.openPageId == pid {
-            await editor?.reloadPage(pageId: pid, html: html, baseUpdatedAt: ms)
-        }
+        // Ist die Seite (weiterhin) sauber offen, still in der WebView neu laden;
+        // lehnt der Editor ab (inzwischen getippt), Basis zurückdrehen.
+        await reloadOpenPageOrRevertBase(pid, html: html, ms: ms, previous: previous)
     }
 
     /// Startet den Poll-Loop, sofern der Auto-Poll erlaubt ist; sonst No-op
@@ -392,7 +474,7 @@ final class SyncEngine: ObservableObject {
     private func startPolling() {
         pollTask?.cancel()
         pollTask = nil
-        guard autoPollEnabled, let interval = pollInterval else { return }
+        guard !halted, autoPollEnabled, let interval = pollInterval else { return }
         pollTask = Task { [weak self] in
             guard let self else { return }
             // Erster Tick kommt über requestSync(); der Loop ergänzt Folge-Ticks.
@@ -422,9 +504,20 @@ final class SyncEngine: ObservableObject {
         // Auto-Tick: nur bei aktivem Fenster + gemeldeter Erreichbarkeit. Manueller
         // Auslöser umgeht beide Gates (Reachability klärt der Request selbst), nur
         // `shouldSync()` (signedIn) und der Reentrancy-Schutz bleiben verbindlich.
-        guard shouldSync(), !isRunning else { return }
+        guard shouldSync(), !halted else { return }
         guard manual || (isActive && reachability.isOnline) else { return }
+        if isRunning {
+            // Auto-Tick: der laufende Durchlauf genügt. Manuell (⌘S, Lektorats-/
+            // Export-Vorlauf) dagegen NICHT einfach verpuffen lassen: der Aufrufer
+            // hat eben den Draft gesichert und verlässt sich darauf, dass er danach
+            // auf dem Server liegt. Also warten und selbst noch einmal laufen.
+            guard manual else { return }
+            await waitUntilIdle()
+            guard shouldSync(), !isRunning else { return }
+        }
         isRunning = true
+        runGeneration = generation
+        runIssues = 0
         status = .syncing
         serverReachedThisRun = false
         defer {
@@ -450,12 +543,15 @@ final class SyncEngine: ObservableObject {
             try await pushOutbox()
             try await pullDeltas()
             await reconcileDeletesIfDue()
+            try ensureNotSuperseded()
             pendingCount = (try? await store.pendingOutbox().count) ?? pendingCount
             lastSyncedAt = Date()
-            lastError = nil
+            lastError = runIssues > 0 ? tn(runIssues, "sync.error.partial") : nil
         } catch AuthError.unauthorized {
             // Session beendet der APIClient bereits; hier nichts erzwingen.
             log.info("Sync abgebrochen: nicht autorisiert")
+        } catch SyncSuperseded.serverSwitch {
+            log.info("Sync-Durchlauf vom Server-Wechsel überholt — Rest verworfen")
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             log.error("Sync-Fehler: \(self.lastError ?? "?", privacy: .public)")
@@ -526,137 +622,11 @@ final class SyncEngine: ObservableObject {
         stateStore.mutate { $0.conflicts = dtos }
     }
 
-    /// Lokaler (ungepushter) + frischer Server-Stand eines Konflikts — Grundlage
-    /// für die Nebeneinander-Ansicht der `ConflictResolutionView`. Lokal aus der
-    /// Outbox (Fallback: Store), Server per Online-GET (wie `resolveConflict`).
-    /// `nil`, wenn der Server-Abruf scheitert (offline) oder kein lokaler Stand
-    /// (mehr) vorliegt — die UI zeigt dann einen Lade-/Fehlerzustand.
-    struct ConflictContents: Equatable {
-        let localHtml: String
-        let serverHtml: String
-        let serverUpdatedAt: String?
-    }
+}
 
-    func conflictContents(pageId pid: String) async -> ConflictContents? {
-        let localHtml: String
-        if let entry = ((try? await store.pendingOutbox()) ?? []).first(where: { $0.pageId == pid }) {
-            localHtml = entry.html
-        } else if let page = (try? await store.page(id: pid)) ?? nil {
-            localHtml = page.html
-        } else {
-            return nil
-        }
-        guard let serverPage = try? await api.send("/content/pages/\(pid)",
-                                                   method: .GET,
-                                                   decode: PushResponse.self) else {
-            return nil
-        }
-        return ConflictContents(localHtml: localHtml,
-                                serverHtml: serverPage.html ?? "",
-                                serverUpdatedAt: serverPage.updated_at)
-    }
-
-    /// Manuelle Konflikt-Auflösung aus der UI. Verwirft Inhalte NUR auf
-    /// ausdrückliche Nutzer-Wahl (CLAUDE.md: kein automatisches Verwerfen).
-    ///  • `keepLocal == true`: lokaler Stand erzwingt sich gegen den Server
-    ///    (Force-Push). Wir holen den frischen Server-`updated_at` und pushen das
-    ///    lokale Outbox-HTML mit genau dieser Basis → der Server-Stand wird
-    ///    überschrieben. Damit löst sich auch ein „klebriger" Konflikt, dessen
-    ///    Auto-Merge an einer falschen Basis (z. B. nach Serverwechsel) scheiterte.
-    ///  • `keepLocal == false`: Server-Stand übernehmen, die lokale ungepushte
-    ///    Änderung verwerfen (Outbox-Eintrag droppen, offene Seite neu laden).
-    func resolveConflict(pageId pid: String, keepLocal: Bool) async {
-        guard conflicts.contains(where: { $0.pageId == pid }) else { return }
-
-        // Frischen Server-Stand holen — liefert die exakte `updated_at`-Basis,
-        // die das Überschreiben (PUT) bzw. das Übernehmen braucht.
-        let serverPage: PushResponse
-        do {
-            serverPage = try await api.send("/content/pages/\(pid)",
-                                            method: .GET,
-                                            decode: PushResponse.self)
-        } catch let AuthError.server(status, _, _) where status == 404 {
-            // Seite serverseitig weg (PUT kann nicht anlegen). Konflikt fällt weg,
-            // der lokale Inhalt bleibt erhalten (kein Anlage-Pfad im Client).
-            clearConflict(pageId: pid)
-            lastError = t("sync.conflict.serverGone")
-            log.notice("Konflikt-Auflösung \(pid, privacy: .public): Seite serverseitig nicht (mehr) vorhanden")
-            return
-        } catch {
-            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            log.error("Konflikt-Auflösung \(pid, privacy: .public): Server-GET fehlgeschlagen: \(self.lastError ?? "?", privacy: .public)")
-            return
-        }
-
-        let entry = ((try? await store.pendingOutbox()) ?? []).first { $0.pageId == pid }
-
-        if keepLocal {
-            guard let entry else {
-                // Kein lokaler Outbox-Stand mehr (z. B. zwischenzeitlich quittiert)
-                // → nichts zu erzwingen, nur Basis auf den Server stellen.
-                try? await store.setServerBaseHtml(serverPage.html ?? "", id: pid)
-                stateStore.mutate { $0.serverBaseISO[pid] = serverPage.updated_at }
-                clearConflict(pageId: pid)
-                return
-            }
-            let req = PushRequest(html: entry.html, expected_updated_at: serverPage.updated_at)
-            do {
-                let resp = try await api.send("/content/pages/\(pid)",
-                                              method: .PUT,
-                                              body: req,
-                                              decode: PushResponse.self)
-                let ms = ISOTime.millis(resp.updated_at) ?? entry.queuedAt
-                // Outbox atomar quittieren; Basis nur vorrücken, wenn der Eintrag
-                // unverändert war (sonst trägt ein zwischenzeitlicher Save eine
-                // andere Basis und wird beim nächsten Tick regulär gepusht).
-                let quittiert = (try? await store.markPushed(id: pid, queuedAt: entry.queuedAt, serverUpdatedAtMillis: ms)) ?? false
-                if quittiert {
-                    try? await store.setServerBaseHtml(entry.html, id: pid)
-                    stateStore.mutate { $0.serverBaseISO[pid] = resp.updated_at }
-                }
-                clearConflict(pageId: pid)
-                lastError = nil
-                lastSyncedAt = Date()
-                log.info("Konflikt aufgelöst (lokaler Stand erzwungen): \(pid, privacy: .public)")
-            } catch {
-                // Force-Push misslungen (z. B. erneutes Rennen) → Konflikt bleibt
-                // bestehen, der Nutzer kann es erneut versuchen.
-                lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                log.error("Force-Push \(pid, privacy: .public) fehlgeschlagen: \(self.lastError ?? "?", privacy: .public)")
-            }
-        } else {
-            // Server-Stand übernehmen, lokale Änderung verwerfen.
-            let serverHtml = serverPage.html ?? ""
-            let ms = ISOTime.millis(serverPage.updated_at) ?? 0
-            // Erst lokal übernehmen + Outbox droppen, DANN die Basis vorrücken.
-            // Sonst bliebe bei einem fehlgeschlagenen Write der alte lokale Stand
-            // mit bereits vorgerückter Basis zurück und käme über einen 409-Re-Merge
-            // wieder hoch — obwohl der Nutzer „Server übernehmen" gewählt hat.
-            do {
-                try await store.applyServerPage(id: pid, html: serverHtml,
-                                                pageName: nil, bookId: nil, chapterId: nil,
-                                                serverUpdatedAtMillis: ms)
-                // Outbox-Eintrag droppen (falls unverändert seit dem Lesen oben).
-                if let entry {
-                    try await store.markPushed(id: pid, queuedAt: entry.queuedAt, serverUpdatedAtMillis: ms)
-                }
-            } catch {
-                lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                log.error("Konflikt-Auflösung \(pid, privacy: .public): Server-Stand lokal übernehmen fehlgeschlagen: \(self.lastError ?? "?", privacy: .public)")
-                return
-            }
-            try? await store.setServerBaseHtml(serverHtml, id: pid)
-            stateStore.mutate { $0.serverBaseISO[pid] = serverPage.updated_at }
-            clearConflict(pageId: pid)
-            lastError = nil
-            // Offene Seite mit dem übernommenen Server-Stand neu laden (Nutzer hat
-            // „Server übernehmen" gewählt → auch eine dirty Seite wird ersetzt).
-            if editor?.openPageId == pid {
-                await editor?.reloadPage(pageId: pid, html: serverHtml, baseUpdatedAt: ms)
-            }
-            log.info("Konflikt aufgelöst (Server-Stand übernommen): \(pid, privacy: .public)")
-        }
-
-        pendingCount = (try? await store.pendingOutbox().count) ?? pendingCount
-    }
+/// Ein laufender Sync-Durchlauf wurde von einem Server-Wechsel bzw. Spiegel-
+/// Reset überholt und bricht ab, statt in den Zustand des neuen Servers zu
+/// schreiben.
+enum SyncSuperseded: Error {
+    case serverSwitch
 }

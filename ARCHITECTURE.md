@@ -102,7 +102,7 @@ Alle Dateien unter [Web/](schreibwerkstatt-focuseditor/Web/).
 - `languagetoolCheck`/`dictionaryAdd` proxyen über `APIClient`; lokale `SpellcheckPrefs` (UserDefaults) können vor dem Roundtrip abkürzen.
 - `console.log/info/warn/error` werden in der Facade abgefangen und über `log` ins OS-Log gespiegelt (einzeilig + gekürzt).
 
-**Swift → JS** (über `callAsyncJavaScript` in `contentWorld: .page`, Ziel `window.__focusBridge._receive`): `serverUpdate`, `openPage`, `closePage`, `focusGranularity`, `editorTypography`, `format`, `normalizeQuotes`, `synonyms`. Plus die zwei awaitbaren Direktaufrufe `flushDraftSave()` (⌘S-Vorlauf) und `merge3(base:local:server:)`, das `window.__focusBridge._merge3(...)` aufruft (lädt `block-merge.js` dynamisch) und `MergeOutcome { merged, conflictCount }` zurückgibt.
+**Swift → JS** (über `callAsyncJavaScript` in `contentWorld: .page`, Ziel `window.__focusBridge._receive`): `openPage`, `closePage`, `focusGranularity`, `editorTypography`, `format`, `normalizeQuotes`, `synonyms`. Plus die awaitbaren Direktaufrufe `reloadPage(…, force:) -> Bool` (`_serverUpdate`, der stille Server-Refresh — mit Antwort, weil Swift bei Ablehnung die Sync-Basis zurückdreht), `flushDraftSave()` (⌘S-Vorlauf) und `merge3(base:local:server:)`, das `window.__focusBridge._merge3(...)` aufruft (lädt `block-merge.js` dynamisch) und `MergeOutcome { merged, conflictCount }` zurückgibt.
 
 **Härtung** (die WebView ist eine nicht vertrauenswürdige Quelle — sie führt fremden Editor-Code aus dem OTA-Bundle aus):
 
@@ -189,7 +189,7 @@ Zwei Implementierungen:
 
 ## 5. Sync-Schicht: Poll, Push, Pull, Merge
 
-Alle Dateien unter [Sync/](schreibwerkstatt-focuseditor/Sync/). Kern ist die `@MainActor final class SyncEngine`, aus Lesbarkeitsgründen über drei Dateien gesplittet (ein Typ, `extension`-Aufteilung, kein Verhaltensunterschied): [SyncEngine.swift](schreibwerkstatt-focuseditor/Sync/SyncEngine.swift) (Typen · State · Lifecycle · Durchlauf `syncNow` · Konflikt-UI), [SyncEngine+Push.swift](schreibwerkstatt-focuseditor/Sync/SyncEngine+Push.swift) (`pushOutbox` · Auto-Merge) und [SyncEngine+Pull.swift](schreibwerkstatt-focuseditor/Sync/SyncEngine+Pull.swift) (Pull · Delete-Reconcile). Weil `private` in Swift dateiweit ist, sind die von den Extensions geteilten Member `internal` statt `private` (Single-Module — nichts außerhalb referenziert `SyncEngine`).
+Alle Dateien unter [Sync/](schreibwerkstatt-focuseditor/Sync/). Kern ist die `@MainActor final class SyncEngine`, aus Lesbarkeitsgründen über vier Dateien gesplittet (ein Typ, `extension`-Aufteilung, kein Verhaltensunterschied): [SyncEngine.swift](schreibwerkstatt-focuseditor/Sync/SyncEngine.swift) (Typen · State · Lifecycle · Durchlauf `syncNow` · Generation-Token beim Server-Wechsel), [SyncEngine+Push.swift](schreibwerkstatt-focuseditor/Sync/SyncEngine+Push.swift) (`pushOutbox` · Auto-Merge · Basis-Reparatur), [SyncEngine+Pull.swift](schreibwerkstatt-focuseditor/Sync/SyncEngine+Pull.swift) (Pull · Delete-Reconcile · Reload der offenen Seite mit Basis-Rückdrehung) und [SyncEngine+Conflicts.swift](schreibwerkstatt-focuseditor/Sync/SyncEngine+Conflicts.swift) (manuelle Konflikt-Auflösung · Übernahme nach Revision-Restore; im Test-Target explizit eingetragen). Weil `private` in Swift dateiweit ist, sind die von den Extensions geteilten Member `internal` statt `private` (Single-Module — nichts außerhalb referenziert `SyncEngine`).
 
 ### Poll-Loop
 
@@ -324,7 +324,7 @@ Kopplungspunkt:
 | Funktion | Weg | Warum kein Bridge-Op |
 |---|---|---|
 | Seiten anlegen/umbenennen/löschen ([PageAdminController](schreibwerkstatt-focuseditor/Library/PageAdminController.swift)) | Swift → Server → `store` → `library.refreshPages()` | Verwaltung von Datensätzen, kein Editor-Inhalt. Die offene Seite wird nur beim Löschen berührt (`library.closePage()`). |
-| Frühere Fassungen ([PageRevisionStore](schreibwerkstatt-focuseditor/Revisions/PageRevisionStore.swift)) | Swift → Server; nach Restore `sync.pullPage` | Der Server schreibt die alte Fassung zurück; die WebView erfährt es über den ganz normalen Open-Page-Pull (saubere Seite → stiller Reload). Ein eigener Weg in die WebView wäre ein zweiter Reload-Pfad neben `serverUpdate`. |
+| Frühere Fassungen ([PageRevisionStore](schreibwerkstatt-focuseditor/Revisions/PageRevisionStore.swift)) | Swift → Server; vorher `prepare` (Draft sichern + pushen), nach Restore `sync.adoptServerStateAfterRestore` | Der Server schreibt die alte Fassung zurück; der Client übernimmt sie VERBINDLICH (wie „Server übernehmen": Outbox-Eintrag droppen, Basis setzen, Reload mit `force`). Ein gewöhnlicher Pull übersprünge eine dirty Seite bzw. eine mit Outbox-Eintrag — und der lokale Stand drehte die Wiederherstellung per Merge zurück. |
 | Buch-Export ([Export/](schreibwerkstatt-focuseditor/Export/)) | Swift → Server (`GET /export/book/:id/md`) → `NSSavePanel` | Der Server exportiert seinen eigenen Stand. Darum vorher `prepare` = `bridge.flushDraftSave()` + `sync.syncNow(manual:)`; was danach noch in der Outbox (`store`) liegt, weist das Banner als ungesynct aus. |
 
 Gemeinsames Muster: **Server-Erfolg zuerst, lokale Wirkung danach.** Beim Löschen

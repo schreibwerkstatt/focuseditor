@@ -41,8 +41,8 @@ final class AuthStore: ObservableObject {
                           account: AuthStore.keychainAccount)
         })
         // 401 aus beliebigem Request → Session beenden (ohne Datenverlust).
-        self.api.onUnauthorized = { [weak self] in
-            Task { @MainActor in self?.handleUnauthorized() }
+        self.api.onUnauthorized = { [weak self] usedToken in
+            Task { @MainActor in self?.handleUnauthorized(usedToken: usedToken) }
         }
     }
 
@@ -117,10 +117,27 @@ final class AuthStore: ObservableObject {
 
     // MARK: - Logout / 401
 
-    /// Manueller Logout: Token entfernen, lokale Inhalte bleiben erhalten.
+    /// Sichert den offenen Editor-Draft, BEVOR die Session endet. Das Abmelden
+    /// baut die Schreibfläche ab (WebView weg) — ohne Flush gingen die
+    /// Tastenanschläge seit dem letzten Autosave verloren (bis 5 s; aus einem
+    /// Menü heraus feuert auch das `blur` der WebView nicht). AppCore verdrahtet
+    /// das auf `bridge.flushDraftSave`. Lokal, braucht kein Token.
+    var flushBeforeSignOut: (@MainActor () async -> Void)?
+
+    /// Manueller Logout: Draft sichern, Token entfernen, lokale Inhalte bleiben
+    /// erhalten. Das Token geht sofort (keine Requests mehr in der Zwischenzeit),
+    /// der Zustandswechsel — der die Schreibfläche abbaut — erst nach dem Flush.
     func signOut() {
         clearToken()
-        state = .signedOut
+        guard let flush = flushBeforeSignOut else {
+            state = .signedOut
+            return
+        }
+        Task { @MainActor in
+            await flush()
+            // Zwischenzeitlich neu angemeldet (anderer Server)? Dann nichts kippen.
+            if !self.hasStoredToken { self.state = .signedOut }
+        }
     }
 
     /// Reaktion auf ein 401 aus laufendem Betrieb.
@@ -132,11 +149,25 @@ final class AuthStore: ObservableObject {
     /// schreiben: bei Erstinstallation stand sie dort, obwohl der Nutzer nie
     /// ein Token hatte. Ein 401 während `signIn` (falsch eingefügtes Token)
     /// wird dort selbst gemeldet (`lastError` im `catch`).
-    private func handleUnauthorized() {
-        guard hasStoredToken || state == .signedIn else { return }
+    ///
+    /// Nur ein 401 auf das AKTUELL gespeicherte Token beendet die Session. Ein
+    /// verspätetes 401 eines Requests ohne Token oder mit einem älteren Token
+    /// (Token gewechselt, während ein Sync-/OTA-Request noch lief) würde sonst
+    /// das eben frisch gespeicherte neue Token löschen.
+    private func handleUnauthorized(usedToken: String?) {
+        guard let usedToken,
+              usedToken == Keychain.read(service: Self.keychainService,
+                                         account: Self.keychainAccount) else { return }
         clearToken()
         lastError = AuthError.unauthorized.errorDescription
-        state = .signedOut
+        guard let flush = flushBeforeSignOut else {
+            state = .signedOut
+            return
+        }
+        Task { @MainActor in
+            await flush()
+            if !self.hasStoredToken { self.state = .signedOut }
+        }
     }
 
     // MARK: - Intern

@@ -10,8 +10,8 @@
 // Beim Release: MARKETING_VERSION erhöhen (z. B. 1.0 -> 1.1). Die
 // Build-Nummer optional je Build hochzählen.
 
-MARKETING_VERSION = 3.24
-CURRENT_PROJECT_VERSION = 46
+MARKETING_VERSION = 3.25
+CURRENT_PROJECT_VERSION = 47
 
 // Demo-Zugang (SW_DEMO_HOST/SW_DEMO_TOKEN) — optionaler Include: die Datei ist
 // gitignored (enthält ein Device-Token). Fehlt sie, bleibt der Demo-Knopf im

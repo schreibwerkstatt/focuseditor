@@ -55,6 +55,9 @@ final class WritingStatsStore: ObservableObject {
         var chars: Int
     }
     private var baselines: [String: DailyBaseline] = [:]
+    /// Seite der letzten Zählung — ein Sprung ohne Eingabe wird nur dann aus der
+    /// Tagesbilanz herausgerechnet, wenn er dieselbe Seite betrifft.
+    private var lastReportedPageId: String?
 
     init() {
         let d = UserDefaults.standard
@@ -82,14 +85,20 @@ final class WritingStatsStore: ObservableObject {
     /// Koppelt den Store an die Bridge: eingehende `reportStats` aktualisieren
     /// die Live-Zahlen + den Tages-Delta. Schwach gehalten — AppCore besitzt die Bridge.
     func attach(to bridge: EditorBridge) {
-        bridge.onStats = { [weak self] pageId, words, chars in
-            self?.update(pageId: pageId, words: words, chars: chars)
+        bridge.onStats = { [weak self] pageId, words, chars, typed in
+            self?.update(pageId: pageId, words: words, chars: chars, typed: typed)
         }
     }
 
     /// Übernimmt eine neue Zählung der offenen Seite und führt den Tages-Delta
     /// fort. Ohne `pageId` (kein Seitenbezug) bleibt der Tages-Delta bei 0.
-    private func update(pageId: String?, words: Int, chars: Int) {
+    ///
+    /// `typed == false` (stiller Server-Refresh derselben Seite): die Änderung
+    /// stammt nicht aus diesem Editor. Die Tagesbaseline wandert um genau diesen
+    /// Sprung mit, damit „heute geschrieben" unverändert bleibt.
+    private func update(pageId: String?, words: Int, chars: Int, typed: Bool) {
+        let previous = (pageId: lastReportedPageId, words: self.words, chars: self.characters)
+        lastReportedPageId = pageId
         self.words = words
         self.characters = chars
 
@@ -105,13 +114,20 @@ final class WritingStatsStore: ObservableObject {
         let pruned = baselines.filter { $0.value.date == today }
         if pruned.count != baselines.count { baselines = pruned; changed = true }
 
-        let base: DailyBaseline
+        var base: DailyBaseline
         if let existing = baselines[pageId] {
             base = existing
         } else {
             // Erste Zählung heute für diese Seite → aktueller Stand ist die Basis.
             base = DailyBaseline(date: today, words: words, chars: chars)
             baselines[pageId] = base
+            changed = true
+        }
+        if !typed, previous.pageId == pageId, var shifted = baselines[pageId] {
+            shifted.words += words - previous.words
+            shifted.chars += chars - previous.chars
+            baselines[pageId] = shifted
+            base = shifted
             changed = true
         }
         if changed { persistBaselines() }

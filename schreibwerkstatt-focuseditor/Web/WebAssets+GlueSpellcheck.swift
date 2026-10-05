@@ -41,16 +41,34 @@ extension WebAssets {
               // Der zweite Aufruf holt das nach; der erste bleibt No-op, falls
               // der Boot schon attached hat. Funktionsdeklaration im try-Block
               // ist gehoisted → die Zuweis ganz oben greift vor jeglichem await.
+              //
+              // Boot und Swift-Nachzug landen beim Start oft gleichzeitig. Der
+              // Attach-Merker `__spellcheck` steht erst nach zwei awaits — darum
+              // teilen sich parallele Aufrufe EIN laufendes Promise (sonst hingen
+              // zwei Controller mit doppelten Listenern am Root). Ergebnis für
+              // Swift: `true` = entschieden (attached oder serverseitig aus),
+              // `null` = noch nicht möglich (offline, Editor noch nicht gemountet)
+              // → Swift versucht es beim nächsten Sync-Tick erneut. Der Merker
+              // hängt an der Facade statt an einem `let`, weil Swift die Funktion
+              // schon während des Modul-Imports rufen kann.
               async function initSpellcheckIfEnabled() {
-                if (window.__spellcheck) return;   // schon attached → nichts tun
+                if (window.__spellcheck) return true;   // schon attached → nichts tun
+                if (!fb._spellcheckInitRun) {
+                  fb._spellcheckInitRun = initSpellcheckNow()
+                    .finally(() => { fb._spellcheckInitRun = null; });
+                }
+                return fb._spellcheckInitRun;
+              }
+              async function initSpellcheckNow() {
                 let cfg;
                 try {
                   cfg = await fb.spellcheckConfig();
                 } catch (e) {
                   fb.log?.('Spellcheck-Config nicht abrufbar: ' + (e && e.message ? e.message : e), 'info');
-                  return;
+                  return null;
                 }
-                if (!cfg || !cfg.enabled) return;
+                if (!cfg || !cfg.enabled) return true;
+                if (window.__spellcheck) return true;
                 try {
                   const mod = await import('./js/cards/editor-spellcheck/controller.js');
                   // Range-Mutation + Caret-Restore aus dem gebündelten Helper
@@ -93,9 +111,14 @@ extension WebAssets {
                     ctl.attach();
                     window.__spellcheck = ctl;
                     fb.log?.('Rechtschreibprüfung aktiv');
+                    return true;
                   }
+                  // Kein Controller im (älteren) Bundle → endgültig; fehlt nur
+                  // der Root (Editor noch nicht gemountet) → später erneut.
+                  return root ? true : null;
                 } catch (e) {
                   fb.log?.('Rechtschreibung nicht verfügbar: ' + (e && e.message ? e.message : e), 'info');
+                  return null;
                 }
               }
               // `_trySpellcheckInit` wurde ganz oben (vor dem ersten await)

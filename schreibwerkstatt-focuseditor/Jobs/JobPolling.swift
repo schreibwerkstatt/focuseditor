@@ -54,9 +54,13 @@ enum JobPolling {
     ///     MainActor (Default-Isolation des Moduls), darf also direkt in den
     ///     Anzeige-Zustand des Aufrufers schreiben.
     ///
-    /// Transiente Lesefehler (Netz-Zucken, kurzer 5xx) überspringen einen Tick,
-    /// statt den Lauf abzubrechen: der Job läuft serverseitig weiter, und ein
-    /// abgebrochenes Warten würde dem Nutzer ein Scheitern melden, das keins ist.
+    /// Transiente Lesefehler (Netz-Zucken, kurzer 5xx, unlesbare Antwort)
+    /// überspringen einen Tick, statt den Lauf abzubrechen: der Job läuft
+    /// serverseitig weiter, und ein abgebrochenes Warten würde dem Nutzer ein
+    /// Scheitern melden, das keins ist. Endgültig ist dagegen ein 4xx: 404 heisst
+    /// „Job weg" (die Queue lebt im Speicher — ein Server-Neustart verliert ihn),
+    /// das endet sofort als `.failed` statt erst nach dem Deckel (Minuten).
+    /// 401 wird geworfen (Session vorbei, kein Weiterpollen ohne Token).
     /// `status == nil` gilt als „läuft noch" — ältere Serverstände liefern das
     /// Feld erst, wenn der Worker den Job angefasst hat.
     static func awaitCompletion<Result: Decodable & Sendable>(
@@ -71,8 +75,17 @@ enum JobPolling {
 
         for _ in 0..<maxPolls {
             try await Task.sleep(for: interval)
-            guard let job = try? await api.send("/jobs/\(encoded)",
-                                                decode: JobStatusEnvelope<Result>.self) else {
+            let job: JobStatusEnvelope<Result>
+            do {
+                job = try await api.send("/jobs/\(encoded)",
+                                         decode: JobStatusEnvelope<Result>.self)
+            } catch AuthError.unauthorized {
+                throw AuthError.unauthorized
+            } catch let AuthError.server(status, code, _) where (400..<500).contains(status) {
+                return .failed(code: code ?? (status == 404 ? "JOB_NOT_FOUND" : nil))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
                 continue
             }
             switch job.status {

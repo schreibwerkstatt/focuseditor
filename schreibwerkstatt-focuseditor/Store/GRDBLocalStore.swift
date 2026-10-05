@@ -376,6 +376,31 @@ final class GRDBLocalStore: LocalStore {
         }
     }
 
+    @discardableResult
+    func applyMergedPush(id: String, html: String, queuedAt: Double, serverUpdatedAtMillis: Double) async throws -> Bool {
+        try await dbQueue.write { db in
+            // Match-Prüfung + Seitenzeile + Outbox-Quittung atomar (s. Protokoll).
+            guard let entry = try OutboxEntry.fetchOne(db, key: id), entry.queuedAt == queuedAt else {
+                return false
+            }
+            try entry.delete(db)
+            try Self.writeServerPage(db, id: id, html: html, pageName: nil,
+                                     bookId: nil, chapterId: nil,
+                                     serverUpdatedAtMillis: serverUpdatedAtMillis)
+            return true
+        }
+    }
+
+    @discardableResult
+    func deletePageIfClean(id: String) async throws -> Bool {
+        try await dbQueue.write { db in
+            if try OutboxEntry.fetchOne(db, key: id) != nil { return false }
+            _ = try StoredPage.deleteOne(db, key: id)
+            try db.execute(sql: "DELETE FROM page_fts WHERE id = ?", arguments: [id])
+            return true
+        }
+    }
+
     /// Gemeinsamer Server-Stand-Write (Pull erzeugt KEINEN Outbox-Eintrag).
     /// `nonisolated`, weil GRDB die Closure im DB-Writer-Thread ausführt.
     nonisolated private static func writeServerPage(_ db: Database, id: String, html: String, pageName: String?, bookId: Int?, chapterId: Int?, serverUpdatedAtMillis: Double) throws {

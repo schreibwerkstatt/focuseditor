@@ -261,6 +261,10 @@ extension WebAssets {
               // Nur bei echtem Zustandswechsel posten (keine Keystroke-Flut).
               let reportedPageId;
               let reportedDirty;
+              // Zählt jede Eingabe (input-Event am Mount). Wer über einen await
+              // hinweg wissen muss, ob inzwischen getippt wurde (Save-Roundtrip,
+              // Seitenwechsel, stiller Server-Refresh), vergleicht den Stand.
+              let inputSeq = 0;
               function reportEditorState(pageId, dirty) {
                 const pid = pageId == null ? null : String(pageId);
                 if (pid === reportedPageId && dirty === reportedDirty) return;
@@ -320,13 +324,13 @@ extension WebAssets {
                     currentPageId = String(page.id);
                     currentBookId = (page.bookId != null) ? Number(page.bookId) : null;
                     bootHadPage = true;
-                    return { id: page.id, name: page.pageName || page.title || 'Seite', html: page.html || '<p><br></p>' };
+                    return { id: page.id, name: page.pageName || page.title || 'Abschnitt', html: page.html || '<p><br></p>' };
                   }
                   bases.set('default', null);
                   currentPageId = 'default';
                   currentBookId = null;
                   bootHadPage = false;
-                  return { id: 'default', name: 'Neue Seite', html: '<p><br></p>' };
+                  return { id: 'default', name: 'Neuer Abschnitt', html: '<p><br></p>' };
                 },
                 savePage: async ({ id, html }) => {
                   // „Geschlossene" (leere) Seite nach einem Buchwechsel nie
@@ -337,9 +341,17 @@ extension WebAssets {
                   // würde sonst als nie-pushbarer „default"-Konflikt landen.
                   if (id == null || id === '' || id === 'default') return null;
                   const base = bases.get(String(id)) ?? null;
+                  const seqAtSave = inputSeq;
                   const res = await fb.save(id, html, base);
                   if (res && res.updatedAt != null) bases.set(String(id), res.updatedAt);
-                  reportEditorState(id, false);   // gespeichert → nicht mehr dirty
+                  // Gespeichert → sauber, AUSSER es wurde während des Roundtrips
+                  // weitergetippt (der Stand im DOM ist dann neuer als der
+                  // gesicherte). Nur für die offene Seite melden: beim Schliessen
+                  // ist currentPageId schon leer — sonst meldete der Save die
+                  // geschlossene Seite Swift gegenüber wieder als offen.
+                  if (String(id) === currentPageId) {
+                    reportEditorState(id, inputSeq !== seqAtSave);
+                  }
                   return res;
                 },
               };
@@ -363,6 +375,25 @@ extension WebAssets {
               if (autosaveMs != null) mountOpts.autosaveMs = autosaveMs;
               window.__standalone = await mountStandaloneFocus(mountOpts);
               status.remove();
+
+              // quickSave des Editors (SSoT) überspringt den Save, wenn der Inhalt
+              // dem geladenen Stand gleicht (Tippen + wieder Löschen) — dann ruft
+              // er savePage nie, und das gemeldete Dirty-Flag bliebe auf true
+              // stehen (Toolbar „ungesichert", Server-Refresh der Seite gesperrt).
+              // Darum nach JEDEM quickSave den echten Zustand nachmelden. Der
+              // Autosave-Timer ruft `host.quickSave()` über die Eigenschaft,
+              // erreicht also diese Hülle.
+              try {
+                const host = window.__standalone.host;
+                const quickSave = host.quickSave.bind(host);
+                host.quickSave = async () => {
+                  const seqAtSave = inputSeq;
+                  await quickSave();
+                  if (currentPageId && inputSeq === seqAtSave && !host.editDirty) {
+                    reportEditorState(currentPageId, false);
+                  }
+                };
+              } catch (_) {}
               fb.log?.('Standalone-Focus gemountet');
 
               // Initial geöffnete Seite (loadPage) an Swift melden → Toolbar-Titel
@@ -383,6 +414,7 @@ extension WebAssets {
               // contenteditable hoch.
               const mountEl = document.getElementById('mount');
               if (mountEl) mountEl.addEventListener('input', (e) => {
+                inputSeq++;
                 if (currentPageId) reportEditorState(currentPageId, true);
                 noticeHistoryEdit(e);
               });

@@ -22,6 +22,14 @@ extension SyncEngine {
     /// Läuft zu Beginn jedes `syncNow`-Durchlaufs VOR `pushOutbox()`. Idempotent:
     /// setzt nur, wenn noch keine Basis existiert. Seiten ohne Buch (Waisen) werden
     /// übersprungen — die erfasst der Push-Pfad als Konflikt.
+    ///
+    /// Datenverlust-Schutz: die Basis wird nur dann auf den aktuellen Server-Stand
+    /// gesetzt, wenn der Server seit der Basis der LOKALEN Änderung unverändert ist
+    /// (gleicher Stempel). Sonst — Server inzwischen bewegt, oder die lokale Basis
+    /// ist unbekannt (verlorener/korrupter Sync-Zustand) — wäre „Basis = jetzt" ein
+    /// stilles Last-Write-Wins über fremde Änderungen. Dann sofort der 3-Wege-Merge
+    /// (kollisionsfrei → still, sonst Konflikt-UI). Ein 404 (Seite serverseitig
+    /// weg) wird als sichtbarer Konflikt erfasst, statt jeden Tick neu zu fragen.
     func repairStalledSyncBases() async {
         let entries: [OutboxEntry]
         do {
@@ -33,22 +41,38 @@ extension SyncEngine {
         for entry in entries {
             // Nur Seiten ohne Basis reparieren (idempotent).
             guard stateStore.state.serverBaseISO[entry.pageId] == nil else { continue }
+            // Offener Konflikt → die UI entscheidet, kein erneuter Server-Abruf.
+            if conflicts.contains(where: { $0.pageId == entry.pageId }) { continue }
             // Seite ohne Buch → Waise, wird vom Push-Pfad als Konflikt erfasst.
             guard let stored = try? await store.page(id: entry.pageId),
                   stored.bookId != nil else { continue }
             // Server-Stand holen.
-            guard let encodedId = entry.pageId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-                  let resp = try? await reachableSend({
-                      try await api.send("/content/pages/\(encodedId)",
-                                         method: .GET,
-                                         decode: PushResponse.self)
-                  }),
-                  let html = resp.html else {
+            guard let encodedId = entry.pageId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { continue }
+            let resp: PushResponse
+            do {
+                resp = try await reachableSend {
+                    try await api.send("/content/pages/\(encodedId)",
+                                       method: .GET,
+                                       decode: PushResponse.self)
+                }
+            } catch let AuthError.server(status, _, _) where status == 404 {
+                await recordConflict(pageId: entry.pageId, serverUpdatedAt: nil, serverEditorName: nil)
+                log.notice("Sync-Basis-Reparatur: Seite serverseitig weg (404), als Konflikt erfasst: \(entry.pageId, privacy: .public)")
+                continue
+            } catch {
                 continue
             }
-            // Basis setzen (idempotent: nur wenn noch keine existiert).
-            await setSyncBase(pageId: entry.pageId, serverUpdatedAt: resp.updated_at, html: html)
-            log.info("Sync-Deadlock repariert (Basis nachgesetzt): \(entry.pageId, privacy: .public)")
+            guard !isSuperseded, let html = resp.html else { continue }
+            let localBase = entry.baseUpdatedAt ?? stored.baseUpdatedAt
+            if let localBase, ISOTime.millis(resp.updated_at) == localBase {
+                // Server seit der Basis der lokalen Änderung unverändert → gefahrlos.
+                await setSyncBase(pageId: entry.pageId, serverUpdatedAt: resp.updated_at, html: html)
+                log.info("Sync-Deadlock repariert (Basis nachgesetzt): \(entry.pageId, privacy: .public)")
+            } else {
+                // Server bewegt oder Basis unbekannt → mergen statt überschreiben.
+                log.notice("Sync-Basis-Reparatur: Server-Stand weicht ab → Merge: \(entry.pageId, privacy: .public)")
+                await resolveConflict(entry: entry, conflict: nil)
+            }
         }
     }
 
@@ -108,6 +132,8 @@ extension SyncEngine {
                                        body: req,
                                        decode: PushResponse.self)
                 }
+                // Serverwechsel während des PUT → nichts mehr in den (neuen) Spiegel schreiben.
+                try ensureNotSuperseded()
                 // ERST Outbox atomar quittieren, DANN die Basis vorrücken — und nur,
                 // wenn wirklich quittiert wurde. Hat der Nutzer WÄHREND des PUT erneut
                 // gespeichert, trägt der neue Outbox-Eintrag eine andere Basis; die
@@ -127,9 +153,18 @@ extension SyncEngine {
                     // Erfolgreicher Push → eine etwaige Lock-Backoff-Frist aufheben.
                     lockedUntil[entry.pageId] = nil
                 } else {
-                    // Zwischenzeitlicher Save → der nächste Tick pusht den neuen Stand
-                    // regulär (ggf. 409 → Block-Merge). Basis bewusst nicht vorgerückt.
-                    log.info("Push nicht quittiert (Save während PUT): \(entry.pageId, privacy: .public)")
+                    // Zwischenzeitlicher Save → der neue Outbox-Eintrag bleibt und geht
+                    // beim nächsten Tick raus. Die Basis trotzdem vorrücken: der Server
+                    // hält jetzt GENAU `entry.html` unter `resp.updated_at`, und der neue
+                    // Eintrag ist eine Fortschreibung desselben Editor-Stands. Bliebe die
+                    // alte Basis stehen, liefe der nächste Push in ein 409 gegen den
+                    // eigenen Text und der Merge meldete eine Kollision (alle drei
+                    // Fassungen des Absatzes verschieden) — Konflikt-Modal gegen sich
+                    // selbst, bei „Server übernehmen" mit Verlust der jüngsten Zeichen.
+                    try? await store.setServerBaseHtml(entry.html, id: entry.pageId)
+                    stateStore.mutate { $0.serverBaseISO[entry.pageId] = resp.updated_at }
+                    lockedUntil[entry.pageId] = nil
+                    log.info("Push nicht quittiert (Save während PUT), Basis vorgerückt: \(entry.pageId, privacy: .public)")
                 }
             } catch let AuthError.server(status, _, body) where status == 409 {
                 // Stale-Write → 3-Wege-Block-Merge versuchen, sonst Konflikt erfassen.
@@ -164,9 +199,15 @@ extension SyncEngine {
             } catch AuthError.unauthorized {
                 // Session beendet → ganzen Sync abbrechen (kein blindes Weiterpushen).
                 throw AuthError.unauthorized
+            } catch SyncSuperseded.serverSwitch {
+                throw SyncSuperseded.serverSwitch
             } catch {
                 // Netzfehler/Timeout o. Ä. → nur diesen Eintrag überspringen, die
                 // restliche Outbox nicht blockieren. Nächster Tick versucht erneut.
+                // Ein Transport-Fehler ist Alltag (offline), ein Server-Fehler
+                // (5xx, 413 …) dagegen ein Problem, das sich nicht von selbst
+                // löst — der zählt für die Status-Anzeige.
+                if case AuthError.server = error { runIssues += 1 }
                 log.error("Push fehlgeschlagen \(entry.pageId, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 continue
             }
@@ -204,6 +245,7 @@ extension SyncEngine {
             log.notice("Konflikt-Merge für \(pid, privacy: .public) verschoben: \(error.localizedDescription, privacy: .public)")
             return
         }
+        guard !isSuperseded else { return }
 
         let serverHtml = serverPage.html ?? ""
         // Merge-Ancestor der Seite (Spalte im Store; `nil` = keiner bekannt → der
@@ -218,7 +260,11 @@ extension SyncEngine {
             await recordConflict(pageId: pid,
                                  serverUpdatedAt: serverPage.updated_at,
                                  serverEditorName: c?.server_editor_name)
-            log.notice("Block-Merge nicht verfügbar für \(pid, privacy: .public) — Konflikt offen")
+            // Ursache mitloggen: ein JS-Fehler im Merge (WebKit legt die Exception-
+            // Meldung in den userInfo) sieht sonst genauso aus wie „kein Editor".
+            let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String
+                ?? error.localizedDescription
+            log.notice("Block-Merge nicht verfügbar für \(pid, privacy: .public) — Konflikt offen: \(detail, privacy: .public)")
             return
         }
 
@@ -240,38 +286,43 @@ extension SyncEngine {
                                    body: req,
                                    decode: PushResponse.self)
             }
+            guard !isSuperseded else { return }
             let ms = ISOTime.millis(resp.updated_at) ?? entry.queuedAt
-            // Gemergten Stand ERST lokal übernehmen + Outbox quittieren, DANN die
-            // Basis vorrücken. Schlägt der lokale Write fehl, die Basis NICHT
-            // vorrücken und den Eintrag NICHT quittieren: der nächste Tick merged
-            // denselben Stand idempotent erneut, statt mit vorgerückter Basis das
-            // alte lokale HTML gegen den bereits gemergten Server-Stand zu pushen
-            // (das würde die eingemergten Server-Änderungen verlieren).
+            let previous = await baseSnapshot(pid)
+            // Gemergten Stand lokal übernehmen + Outbox quittieren in EINER
+            // Transaktion — und nur, wenn der Outbox-Eintrag seit dem Lesen
+            // unverändert ist. Früher wurde die Seitenzeile VOR dieser Prüfung
+            // überschrieben: kam während des Merge ein Save, stand im Spiegel das
+            // Merge-Ergebnis ohne die jüngsten Zeichen, und das nächste Öffnen der
+            // Seite lud genau diesen Stand. Schlägt der Write fehl, Basis NICHT
+            // vorrücken: der nächste Tick merged idempotent erneut.
             let quittiert: Bool
             do {
-                try await store.applyServerPage(id: pid, html: outcome.merged,
-                                                pageName: nil, bookId: nil, chapterId: nil,
-                                                serverUpdatedAtMillis: ms)
-                quittiert = try await store.markPushed(id: pid, queuedAt: entry.queuedAt, serverUpdatedAtMillis: ms)
+                quittiert = try await store.applyMergedPush(id: pid, html: outcome.merged,
+                                                            queuedAt: entry.queuedAt,
+                                                            serverUpdatedAtMillis: ms)
             } catch {
                 log.error("Auto-Merge lokal persistieren fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public) — Basis nicht vorgerückt, Retry beim nächsten Tick")
                 return
             }
             guard quittiert else {
-                // Save während des Merge-PUT → der neue Outbox-Eintrag wird beim
-                // nächsten Tick frisch gemergt. Basis NICHT vorrücken (sonst ginge
-                // der zwischenzeitliche Edit gegen die falsche Basis).
-                log.notice("Auto-Merge: Save während PUT — Basis nicht vorgerückt, Retry: \(pid, privacy: .public)")
+                // Save während des Merge-PUT → Seitenzeile + neuer Outbox-Eintrag
+                // bleiben unangetastet. Der neue Eintrag schreibt `entry.html` fort,
+                // nicht das Merge-Ergebnis — darum wird `entry.html` sein Ancestor,
+                // während die ISO-Basis bewusst ALT bleibt: der nächste Push läuft
+                // so in ein 409 und merged nur noch die jüngsten Zeichen gegen den
+                // (bereits gemergten) Server-Stand, statt ihn zu überschreiben.
+                try? await store.setServerBaseHtml(entry.html, id: pid)
+                log.notice("Auto-Merge: Save während PUT — Ancestor fortgeschrieben, Retry: \(pid, privacy: .public)")
                 return
             }
             autoMergeRe409[pid] = nil   // erfolgreich konvergiert → Re-Zähler zurücksetzen
             try? await store.setServerBaseHtml(outcome.merged, id: pid)
             stateStore.mutate { $0.serverBaseISO[pid] = resp.updated_at }
             clearConflict(pageId: pid)
-            // Offene, saubere Seite still mit dem Merge-Ergebnis aktualisieren.
-            if editor.openPageId == pid, !editor.isDirty(pid) {
-                await editor.reloadPage(pageId: pid, html: outcome.merged, baseUpdatedAt: ms)
-            }
+            // Offene, saubere Seite still mit dem Merge-Ergebnis aktualisieren
+            // (lehnt der Editor ab, wird die Basis zurückgedreht).
+            await reloadOpenPageOrRevertBase(pid, html: outcome.merged, ms: ms, previous: previous)
             log.info("Auto-Merge gepusht: \(pid, privacy: .public)")
         } catch let AuthError.server(status, _, _) where status == 409 {
             // Erneutes Rennen. Begrenzt oft still neu versuchen; danach als

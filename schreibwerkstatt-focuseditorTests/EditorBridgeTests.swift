@@ -237,7 +237,7 @@ final class EditorBridgeTests: XCTestCase {
     func testReportStatsForwardsToCallback() async throws {
         let (bridge, _) = makeBridge()
         var seen: (String?, Int, Int)?
-        bridge.onStats = { seen = ($0, $1, $2) }
+        bridge.onStats = { seen = ($0, $1, $2); _ = $3 }
         _ = try await bridge.route(op: "reportStats",
                                    params: ["pageId": "p1", "words": 12, "chars": 80])
         XCTAssertEqual(seen?.0, "p1")
@@ -332,7 +332,7 @@ final class EditorBridgeTests: XCTestCase {
     func testReportStatsClampsJunkNumbers() async throws {
         let (bridge, _) = makeBridge()
         var seen: (String?, Int, Int)?
-        bridge.onStats = { seen = ($0, $1, $2) }
+        bridge.onStats = { seen = ($0, $1, $2); _ = $3 }
         _ = try await bridge.route(op: "reportStats",
                                    params: ["words": Double.nan, "chars": -5])
         XCTAssertEqual(seen?.1, 0)

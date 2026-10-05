@@ -26,32 +26,73 @@ extension WebAssets {
               // einer Seite NICHTS (Event ohne Listener) → kein Seitenwechsel.
               // Inhalt frisch aus dem LocalStore ziehen (offline-first), damit
               // name/bookId/updatedAt konsistent zur loadPage-Logik sind.
-              async function applyPage(pageId, { save, focus }) {
+              //
+              // Rennen (Datenverlust-Schutz): Laden + Sichern sind Bridge-
+              // Roundtrips (`load` ggf. sogar übers Netz). Währenddessen bleibt
+              // die alte Seite editierbar, und ein zweiter Wechsel kann
+              // dazwischenfahren. Darum:
+              //  - Sequenz-Token: nur der JÜNGSTE Aufruf darf setPage ausführen;
+              //    ein überholter kehrt nach jedem await still zurück.
+              //  - Erst laden, DANN sichern: das Sichern ist der letzte await vor
+              //    setPage, und es wiederholt sich, solange währenddessen getippt
+              //    wurde (setPage verwirft den Autosave-Timer und das DOM).
+              //  - Stiller Server-Refresh (`onlyIfClean`): nur, wenn die Seite
+              //    noch die offene ist und seit dem Auftrag nicht getippt wurde.
+              //    Liefert, ob der Reload übernommen wurde — Swift dreht sonst die
+              //    Sync-Basis zurück, damit der nächste Push in den Merge läuft.
+              //  - Ein Refresh weicht jedem Seitenwechsel aus (nicht umgekehrt):
+              //    er zählt das Token nicht hoch und bricht ab, sobald ein
+              //    Wechsel läuft oder dazwischenkommt.
+              let applySeq = 0;
+              let switchesInFlight = 0;
+              async function applyPage(pageId, opts) {
+                if (opts.onlyIfClean) return applyPageNow(pageId, opts);
+                switchesInFlight++;
+                try { return await applyPageNow(pageId, opts); } finally { switchesInFlight--; }
+              }
+              async function applyPageNow(pageId, { save, focus, onlyIfClean }) {
+                const seq = onlyIfClean ? applySeq : ++applySeq;
+                const pid = String(pageId);
+                const inputAtStart = inputSeq;
+                const stillClean = () => switchesInFlight === 0
+                  && currentPageId === pid && inputSeq === inputAtStart
+                  && !reportedDirty && !(window.__standalone && window.__standalone.host
+                    && window.__standalone.host.editDirty);
+                if (onlyIfClean && !stillClean()) return false;
                 // Hatte die Schreibfläche gerade den Fokus? (für den stillen
                 // Server-Refresh: dann Caret in-place wiederherstellen, statt ihn
                 // beim setPage-DOM-Tausch lautlos wegspringen zu lassen.)
                 const prev = activeContent();
                 const wasFocused = !!(prev && prev.contains(document.activeElement));
-                // Caret der bisher offenen Seite merken (Session), BEVOR setPage
-                // den Content-Knoten austauscht.
-                saveCaret(currentPageId);
+                let page = null;
+                try { page = await fb.load(pid); } catch (_) {}
+                if (seq !== applySeq) return false;
+                if (onlyIfClean && !stillClean()) return false;
                 // Beim Picker-Wechsel den aktuellen Stand zuerst sichern
                 // (local-first): setPage verwirft den Autosave-Timer, sonst
                 // gingen offene Änderungen der bisherigen Seite verloren.
-                if (save) { try { await window.__standalone.save(); } catch (_) {} }
+                if (save) {
+                  for (let i = 0; i < 3; i++) {
+                    const before = inputSeq;
+                    try { await window.__standalone.save(); } catch (_) {}
+                    if (seq !== applySeq) return false;
+                    if (inputSeq === before) break;
+                  }
+                }
+                // Caret der bisher offenen Seite merken (Session), BEVOR setPage
+                // den Content-Knoten austauscht.
+                saveCaret(currentPageId);
                 hideEmpty();   // wieder eine Seite offen → ruhige Leerfläche weg
-                let page = null;
-                try { page = await fb.load(String(pageId)); } catch (_) {}
-                bases.set(String(pageId), page ? (page.updatedAt ?? null) : null);
-                currentPageId = String(pageId);
+                bases.set(pid, page ? (page.updatedAt ?? null) : null);
+                currentPageId = pid;
                 currentBookId = (page && page.bookId != null) ? Number(page.bookId) : null;
                 window.__standalone.setPage({
                   id: pageId,
-                  name: (page && (page.pageName || page.title)) || 'Seite',
+                  name: (page && (page.pageName || page.title)) || 'Abschnitt',
                   html: (page && page.html != null) ? page.html : '<p><br></p>',
                 });
                 // Neu eingespielte Seite ist sauber → Swift/Toolbar nachziehen.
-                reportEditorState(String(pageId), false);
+                reportEditorState(pid, false);
                 // Undo gehört ab jetzt zur NEUEN Seite: WebKits Undo-Stack hängt
                 // an der WebView, nicht am Inhalt — die Einträge der vorigen Seite
                 // würden sonst als wirkungslose „Widerrufen"-Schritte stehenbleiben.
@@ -67,9 +108,10 @@ extension WebAssets {
                 //    wiederherstellen — kein Fokus-Diebstahl aus Toolbar/anderer
                 //    App, aber auch kein lautloses Caret-Wegspringen beim Sync-Tick.
                 if (focus || wasFocused) {
-                  const stored = caretByPage.get(String(pageId));
+                  const stored = caretByPage.get(pid);
                   focusEditor(typeof stored === 'number' ? { caretOffset: stored } : undefined);
                 }
+                return true;
               }
 
               // Inline-Formatierung über das Format-Menü (Swift → JS). Spiegelt
@@ -155,20 +197,32 @@ extension WebAssets {
                 applyPage(p.pageId, { save: true, focus: true });
               });
               // Saubere offene Seite wurde serverseitig aktualisiert → still neu
-              // laden (Swift sendet das nur für die nicht-dirty offene Seite, also
-              // KEIN Save — der Server-Stand ist bereits die Quelle der Wahrheit).
-              fb.on('serverUpdate', (p) => {
-                if (!p || p.pageId == null) return;
-                applyPage(p.pageId, { save: false });
-              });
+              // laden. Awaitbarer Direktaufruf statt Event-Bus: Swift braucht die
+              // Antwort. Swifts Sicht auf „offen + sauber" ist über die IPC
+              // immer etwas alt — darum prüft der Editor hier SELBST (Seite noch
+              // offen, nicht getippt) und lehnt sonst ab (`false`). `force`
+              // (Konflikt „Server übernehmen") ersetzt bewusst auch eine dirty
+              // Seite, aber nur, wenn sie noch die offene ist.
+              fb._serverUpdate = async (p) => {
+                if (!p || p.pageId == null) return false;
+                if (p.force) {
+                  if (currentPageId !== String(p.pageId)) return false;
+                  return await applyPage(p.pageId, { save: false });
+                }
+                return await applyPage(p.pageId, { save: false, onlyIfClean: true });
+              };
               // Seite schliessen (Buchwechsel ODER bewusst über die Toolbar):
               // aktuellen Stand sichern (local-first), die Schreibfläche leeren
               // und die ruhige Leerfläche einblenden. Swift öffnet danach den
               // Picker. Kein Datenverlust — der Stand wurde vorher gespeichert.
               fb.on('closePage', async () => {
+                applySeq++;   // ein noch laufender Seitenwechsel darf danach nicht mehr öffnen
                 saveCaret(currentPageId);   // Position für späteres Wieder-Öffnen merken
-                try { await window.__standalone.save(); } catch (_) {}
+                // currentPageId VOR dem Sichern leeren: savePage meldet den
+                // Zustand nur für die offene Seite — sonst meldete der Save die
+                // eben geschlossene Seite Swift gegenüber kurz wieder als offen.
                 currentPageId = null;
+                try { await window.__standalone.save(); } catch (_) {}
                 currentBookId = null;
                 try {
                   window.__standalone.setPage({ id: '', name: '', html: '<p><br></p>' });

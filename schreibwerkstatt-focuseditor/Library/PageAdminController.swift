@@ -23,7 +23,9 @@
 //  Server behandelt reine Renames getrennt vom Body (der letzte Text-Autor
 //  bleibt stehen), und ein Concurrency-Guard auf einen Namen wäre eine
 //  Konfliktquelle ohne Nutzen. Die Antwort trägt das neue `updated_at` — es
-//  wird als Basis übernommen, sonst liefe der nächste Body-Push in einen 409.
+//  wird als Push-Basis übernommen (`onServerBase` → `SyncEngine.adoptServerBase`,
+//  dort die ISO-Basis, die der Push als `expected_updated_at` schickt), sonst
+//  liefe der nächste Body-Push in einen 409.
 //
 
 import Foundation
@@ -44,12 +46,18 @@ final class PageAdminController: ObservableObject {
     private let api: APIClient
     private let store: any LocalStore
     private let library: LibraryStore
+    /// Übernimmt eine vom Server gemeldete Basis (`pageId`, exakte ISO,
+    /// Server-HTML falls geliefert) in den Sync-Zustand. Die Epoch-Basis im Store
+    /// allein genügt nicht: der Push schickt die ISO aus dem Sync-Zustand.
+    private let onServerBase: (String, String, String?) async -> Void
     private let log = AppLog.pageAdmin
 
-    init(api: APIClient, store: any LocalStore, library: LibraryStore) {
+    init(api: APIClient, store: any LocalStore, library: LibraryStore,
+         onServerBase: @escaping (String, String, String?) async -> Void) {
         self.api = api
         self.store = store
         self.library = library
+        self.onServerBase = onServerBase
     }
 
     func dismissError() { phase = .idle }
@@ -83,6 +91,7 @@ final class PageAdminController: ObservableObject {
                                             bookId: created.book_id ?? bookId,
                                             chapterId: created.chapter_id ?? chapterId,
                                             serverUpdatedAtMillis: createdAt)
+            await onServerBase(String(created.id), created.updated_at, created.html ?? "<p><br></p>")
             phase = .idle
             await library.refreshPages()
             // Erst nach dem Refresh öffnen: `openPage` erwartet die Zeile in der
@@ -120,6 +129,7 @@ final class PageAdminController: ObservableObject {
                                                 chapterId: existing.chapterId,
                                                 serverUpdatedAtMillis: renamedAt)
             }
+            await onServerBase(String(id), updated.updated_at, updated.html)
             phase = .idle
             await library.refreshPages()
             log.info("Seite umbenannt: \(id, privacy: .public)")
@@ -139,7 +149,9 @@ final class PageAdminController: ObservableObject {
         phase = .working
         do {
             try await api.sendVoid("/content/pages/\(id)", method: .DELETE)
-            if library.openPageId == id { library.closePage() }
+            // Späte Saves (Close-Handler des Editors) verwerfen, BEVOR lokal
+            // gelöscht wird — sonst entstünde die Seite danach neu.
+            library.forgetDeletedPage(id: id)
             try await store.deletePage(id: String(id))
             phase = .idle
             await library.refreshPages()

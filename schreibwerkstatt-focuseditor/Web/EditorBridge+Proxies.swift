@@ -172,14 +172,14 @@ extension EditorBridge {
         // Expliziter Check + eigener Rückgabewert statt `return fn()`: die Boot-Fn
         // liefert ein Promise, das zu `undefined` auflöst — daran liesse sich
         // „war nicht registriert" (JS `null`) nicht von „gerufen" unterscheiden.
-        // Darum hier: fehlt die Fn → `null`; ist sie da → awaiten und `true`.
-        // Wirft sie (Import scheiterte, wieder offline), meldet `callJS` `nil` →
-        // Flag bleibt frei, der nächste Sync-Tick versucht erneut.
+        // Darum hier: fehlt die Fn → `null`; sonst ihr Ergebnis — `true` nur,
+        // wenn entschieden ist (attached oder serverseitig aus). Offline oder
+        // noch ohne gemounteten Editor liefert sie `null` → Flag bleibt frei,
+        // der nächste Sync-Tick versucht erneut.
         let result = await callJS("pushDeferredSpellcheckInit", """
             const fn = window.__focusBridge && window.__focusBridge._trySpellcheckInit;
             if (typeof fn !== 'function') { return null; }
-            await fn();
-            return true;
+            return (await fn()) === true ? true : null;
             """)
         let invoked = !(result == nil || result is NSNull)
         if invoked { spellcheckDeferredDone = true }
@@ -229,11 +229,20 @@ extension EditorBridge {
     /// OpenThesaurus-Synonyme (`GET /openthesaurus/synonyms`). Nur Deutsch —
     /// serverseitig über die Buch-Locale aufgelöst; Nicht-Deutsch liefert der
     /// Server `{ disabled: true }`. Lokaler Aus-Schalter greift ebenfalls.
+    /// Erlaubte Zeichen für einen einzelnen Query-WERT (nicht die ganze Query).
+    nonisolated static let queryValueAllowed: CharacterSet = {
+        var set = CharacterSet.urlQueryAllowed
+        set.remove(charactersIn: "&=+?#")
+        return set
+    }()
+
     func synonymsThesaurus(word: String, bookId: Int?) async throws -> [String: Any] {
         guard let api, SynonymPrefs.localEnabled else { return ["disabled": true] }
         // Wort kommt aus der (nicht vertrauenswürdigen) WebView → für den Query
-        // kodieren, sonst verbögen `&`/`#`/Leerzeichen die URL.
-        let encoded = word.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? word
+        // kodieren, sonst verbögen `&`/`#`/Leerzeichen die URL. `.urlQueryAllowed`
+        // allein lässt `&`, `=`, `+` und `?` stehen — die trennen aber Parameter
+        // bzw. werden serverseitig als Leerzeichen gelesen, darum zusätzlich raus.
+        let encoded = word.addingPercentEncoding(withAllowedCharacters: Self.queryValueAllowed) ?? word
         var path = "/openthesaurus/synonyms?word=\(encoded)"
         if let bookId { path += "&book_id=\(bookId)" }
         let resp = try await api.send(path, decode: SynonymListResponse.self)

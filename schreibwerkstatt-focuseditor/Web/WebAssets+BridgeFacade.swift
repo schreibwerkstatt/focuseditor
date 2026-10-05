@@ -103,8 +103,9 @@ extension WebAssets {
         // melden (Live-Stats + Schreibziel + Tages-Delta). Die pageId hängt mit,
         // damit Swift den „heute geschrieben"-Delta korrekt PRO Seite führt
         // (Tagesbaseline pro Seite). Feuert debounced bei Eingabe.
-        reportStats: (words, chars, pageId) =>
-          call('reportStats', { words, chars, pageId: pageId == null ? null : String(pageId) }),
+        reportStats: (words, chars, pageId, typed) =>
+          call('reportStats', { words, chars, pageId: pageId == null ? null : String(pageId),
+                                typed: typed !== false }),
 
         // Swift→JS Event-Bus. Der Editor-Host abonniert z. B. 'serverUpdate'
         // (saubere offene Seite wurde serverseitig aktualisiert → still neu laden).
@@ -130,11 +131,17 @@ extension WebAssets {
         // dynamisch geladen). Von Swift via callAsyncJavaScript aufgerufen.
         // Wirft, wenn kein Bundle vorliegt (Dev-Harness) → Swift wertet das als Konflikt.
         _merge3: async function (baseHtml, localHtml, serverHtml) {
-          // Relativer Specifier wie der restliche Boot-Glue (./js/…). Ein
-          // root-absoluter Pfad (/js/…) bräche, sobald der Cache-Root nicht der
-          // Origin-Root ist — und würde JEDEN 409 still zum harten Konflikt
-          // degradieren. Konsistent halten zu standalone.js/controller.js unten.
-          const m = await import('./js/editor/shared/block-merge.js');
+          // Gegen die Dokument-URL auflösen, NICHT als nackter relativer
+          // Specifier: diese Funktion steht in einem WKUserScript (at-document-
+          // start), und ein relativer `import()` aus einem User-Script hat keine
+          // Basis-URL — WebKit wirft „Module name … does not resolve to a valid
+          // URL", und JEDER 409 degradierte zum harten Konflikt (am laufenden
+          // Client nachgemessen). Ein root-absoluter Pfad (/js/…) bräche
+          // dagegen, sobald der Cache-Root nicht der Origin-Root ist —
+          // `document.baseURI` deckt beides ab (wie die ./js/…-Imports des
+          // Boot-Moduls, die relativ zum Dokument laufen).
+          const url = new URL('js/editor/shared/block-merge.js', document.baseURI).href;
+          const m = await import(url);
           const res = m.mergeBlocks(baseHtml || '', localHtml || '', serverHtml || '');
           return { merged: m.mergedToHtml(res.merged), conflictCount: res.conflicts.length };
         },

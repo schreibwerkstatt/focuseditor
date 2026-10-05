@@ -75,6 +75,11 @@ final class AppCore: ObservableObject {
             store = InMemoryLocalStore()
         }
         let bridge = EditorBridge(store: store, api: auth.api)
+        // Abmelden/401 baut die Schreibfläche ab → vorher den Draft sichern
+        // (knappe Frist wie beim Beenden: lokaler Write, kein Netz).
+        auth.flushBeforeSignOut = { [weak bridge] in
+            await bridge?.flushDraftSave(timeout: EditorBridge.quitFlushTimeout)
+        }
         let content = ContentAPI(api: auth.api)
         self.auth = auth
         self.store = store
@@ -143,8 +148,16 @@ final class AppCore: ObservableObject {
             await bridge?.flushDraftSave()
             await sync?.syncNow(manual: true)
         }
-        self.pageAdmin = PageAdminController(api: auth.api, store: store, library: library)
-        self.revisions = PageRevisionStore(api: auth.api)
+        self.pageAdmin = PageAdminController(api: auth.api, store: store, library: library) { [weak sync] pageId, iso, html in
+            await sync?.adoptServerBase(pageId: pageId, serverUpdatedAt: iso, serverHtml: html)
+        }
+        // Frühere Fassung: derselbe Vorlauf (Draft sichern + pushen), damit der
+        // ersetzte Stand als Revision erhalten bleibt und nichts Ungepushtes die
+        // Wiederherstellung danach wieder überschreibt.
+        self.revisions = PageRevisionStore(api: auth.api) { [weak bridge, weak sync] in
+            await bridge?.flushDraftSave()
+            await sync?.syncNow(manual: true)
+        }
         self.accountDeletion = AccountDeletionController(api: auth.api)
         // Erst NACH bestätigter Server-Löschung lokal aufräumen: Spiegel/Sync-
         // Zustand dieses Servers verwerfen, dann abmelden (→ Login-Screen).

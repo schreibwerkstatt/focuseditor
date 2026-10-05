@@ -55,14 +55,19 @@ extension SyncEngine {
             }
         }
 
+        try ensureNotSuperseded()
         for bookId in stateStore.state.bookIds {
             do {
                 try await pullBook(bookId)
             } catch AuthError.unauthorized {
                 // Session beendet → ganzen Sync abbrechen.
                 throw AuthError.unauthorized
+            } catch SyncSuperseded.serverSwitch {
+                throw SyncSuperseded.serverSwitch
             } catch {
                 // Netzfehler/Timeout bei einem Buch blockiert die restlichen nicht.
+                // Server-Fehler zählen für die Status-Anzeige (s. `runIssues`).
+                if case AuthError.server = error { runIssues += 1 }
                 log.error("Pull Buch \(bookId) fehlgeschlagen: \(error.localizedDescription, privacy: .public)")
                 continue
             }
@@ -89,13 +94,15 @@ extension SyncEngine {
                                    method: .GET,
                                    decode: BookSyncResponse.self)
             }
+            // Serverwechsel während des GET → weder Seiten noch Cursor in den
+            // Zustand des NEUEN Servers schreiben.
+            try ensureNotSuperseded()
 
             let pending = Set(try await store.pendingOutbox().map(\.pageId))
 
             for p in resp.pages {
                 let pid = String(p.page_id)
-                let isOpen = (editor?.openPageId == pid)
-                let isDirtyOpen = isOpen && (editor?.isDirty(pid) ?? false)
+                let isDirtyOpen = (editor?.openPageId == pid) && (editor?.isDirty(pid) ?? false)
                 if pending.contains(pid) || isDirtyOpen {
                     // Lokal ungepushte Änderung (Outbox ODER dirty offene Seite) +
                     // neuerer Server-Stand → Divergenz. Nicht überschreiben und Basis
@@ -111,6 +118,7 @@ extension SyncEngine {
                     log.notice("Pull übersprungen (Seite ohne updated_at): \(pid, privacy: .public)")
                     continue
                 }
+                try ensureNotSuperseded()
                 // Echo des eigenen, eben gepushten Edits: `/sync` liefert bewusst
                 // auch eigene Edits zurück, und nach dem Push steht unsere Basis
                 // bereits auf genau diesem Server-Stempel. Gleicher Stempel = kein
@@ -123,7 +131,9 @@ extension SyncEngine {
                 if stateStore.state.serverBaseISO[pid] == serverUpdatedAt { continue }
 
                 // Unparsbarer Stempel → überspringen statt Epoch 0 (ans Listenende
-                // rutschende Seite) in den Store zu schreiben; nächster Tick erneut.
+                // rutschende Seite) in den Store zu schreiben. Der Cursor rückt
+                // trotzdem darüber hinweg — die Seite kommt erst mit ihrer nächsten
+                // Änderung wieder (ein Server-Datenfehler, kein Netzproblem).
                 guard let ms = ISOTime.millis(serverUpdatedAt) else {
                     log.notice("Pull übersprungen (updated_at unparsbar): \(pid, privacy: .public)")
                     continue
@@ -139,6 +149,7 @@ extension SyncEngine {
                     log.notice("Pull übersprungen (dirty offen, Re-Check): \(pid, privacy: .public)")
                     continue
                 }
+                let previous = await baseSnapshot(pid)
                 let applied = try await store.applyServerPageIfClean(id: pid,
                                                                      html: serverHtml,
                                                                      pageName: p.page_name,
@@ -159,13 +170,13 @@ extension SyncEngine {
                 // fiele sonst auf einen älteren Vorfahren zurück).
                 try? await store.setServerBaseHtml(serverHtml, id: pid)
                 stateStore.mutate { $0.serverBaseISO[pid] = serverUpdatedAt }
-                // Saubere, offene Seite still in der WebView neu laden (clean reload).
-                if isOpen {
-                    await editor?.reloadPage(pageId: pid, html: serverHtml, baseUpdatedAt: ms)
-                }
+                // Saubere, offene Seite still in der WebView neu laden (clean reload);
+                // lehnt der Editor ab (inzwischen getippt), Basis zurückdrehen.
+                await reloadOpenPageOrRevertBase(pid, html: serverHtml, ms: ms, previous: previous)
             }
 
             // Cursor vorrücken + persistieren (robust gegen Abbruch mittendrin).
+            try ensureNotSuperseded()
             let previous = cursor
             stateStore.mutate { $0.cursors[bookId] = resp.cursor }
 
@@ -217,9 +228,14 @@ extension SyncEngine {
     }
 
     private func reconcileBookDeletes(_ bookId: Int, orphans: Set<String>) async throws {
+        // Zeitpunkt VOR dem Tree-Abruf: eine Seite, die lokal danach angelegt oder
+        // gezogen wurde (z. B. „Neue Seite" während des Abrufs), kann der Tree noch
+        // gar nicht kennen — sie wäre sonst sofort wieder gelöscht.
+        let treeRequestedAt = Date().timeIntervalSince1970 * 1000
         // Buch-Tree EINMAL holen → Soll-IDs (Delete-Reconcile) + Kapitel-Zuordnung
         // (Waisen-Backfill) aus derselben Antwort.
         let treePages = ContentAPI.flattenTreePages(try await content.tree(bookId: bookId))
+        guard !isSuperseded else { return }
         // Soll: alle Seiten, die der Server-Tree für das Buch kennt.
         let soll = Set(treePages.map { String($0.id) })
 
@@ -251,25 +267,65 @@ extension SyncEngine {
         let ist = try await store.list(bookId: bookId)
         guard !ist.isEmpty else { return }
 
-        let pending = Set(try await store.pendingOutbox().map(\.pageId))
-
         for summary in ist where !soll.contains(summary.id) {
             let pid = summary.id
-            // Datenverlust-Schutz: nie löschen, wenn lokale Änderung offen/ungepusht
-            // ist oder die Seite gerade dirty im Editor liegt.
-            if pending.contains(pid) {
-                log.notice("Reconcile: \(pid, privacy: .public) serverseitig weg, aber Outbox offen — behalten")
+            if summary.updatedAt > treeRequestedAt {
+                log.notice("Reconcile: \(pid, privacy: .public) jünger als der Tree — behalten")
                 continue
             }
+            // Datenverlust-Schutz: nie löschen, wenn die Seite gerade dirty im
+            // Editor liegt …
             if editor?.openPageId == pid, editor?.isDirty(pid) == true {
                 log.notice("Reconcile: \(pid, privacy: .public) serverseitig weg, aber dirty im Editor — behalten")
                 continue
             }
-
-            // `deletePage` nimmt den Merge-Ancestor als Spalte der Seite mit weg.
-            try await store.deletePage(id: pid)
+            // … oder eine lokale Änderung ungepusht ist. Die Outbox-Prüfung läuft
+            // in DERSELBEN Transaktion wie das Löschen — eine einmal vorab gelesene
+            // Liste veraltete über die awaits dieser Schleife hinweg, und ein Save,
+            // der dazwischen einging, wäre samt Outbox-Eintrag mit gelöscht worden.
+            // `deletePage…` nimmt den Merge-Ancestor als Spalte der Seite mit weg.
+            guard try await store.deletePageIfClean(id: pid) else {
+                log.notice("Reconcile: \(pid, privacy: .public) serverseitig weg, aber Outbox offen — behalten")
+                continue
+            }
             stateStore.mutate { $0.serverBaseISO[pid] = nil }
             log.info("Reconcile: lokale Seite \(pid, privacy: .public) entfernt (serverseitig gelöscht)")
         }
+    }
+
+    // MARK: - Offene Seite neu laden
+
+    /// Basis einer Seite vor der Übernahme eines Server-Stands — zum
+    /// Zurückdrehen, falls der Editor den Reload ablehnt.
+    struct BaseSnapshot {
+        let iso: String?
+        let ancestor: String?
+    }
+
+    func baseSnapshot(_ pid: String) async -> BaseSnapshot {
+        BaseSnapshot(iso: stateStore.state.serverBaseISO[pid],
+                     ancestor: (try? await store.serverBaseHtml(id: pid)) ?? nil)
+    }
+
+    /// Nach Übernahme eines Server-Stands (Basis + Ancestor schon vorgerückt):
+    /// die offene Seite still neu laden. Swifts Sicht „offen + sauber" ist über
+    /// die IPC immer etwas alt — der Editor prüft darum selbst und lehnt ab, wenn
+    /// inzwischen getippt wurde. Dann (oder wenn inzwischen ein Save in der
+    /// Outbox liegt, der noch auf dem ALTEN Stand beruht) die Basis zurückdrehen:
+    /// der nächste Push läuft so in ein 409 und merged die Server-Änderung ein,
+    /// statt sie ohne Merge zu überschreiben. Zurückdrehen ist immer sicher —
+    /// schlimmstenfalls kostet es einen Merge-Roundtrip oder einen erneuten Pull.
+    func reloadOpenPageOrRevertBase(_ pid: String, html: String, ms: Double,
+                                    previous: BaseSnapshot) async {
+        var declined = false
+        if let editor, editor.openPageId == pid {
+            declined = !(await editor.reloadPage(pageId: pid, html: html,
+                                                 baseUpdatedAt: ms, force: false))
+        }
+        let pendingNow = ((try? await store.pendingOutbox()) ?? []).contains { $0.pageId == pid }
+        guard declined || pendingNow else { return }
+        try? await store.setServerBaseHtml(previous.ancestor, id: pid)
+        stateStore.mutate { $0.serverBaseISO[pid] = previous.iso }
+        log.notice("Reload der offenen Seite abgelehnt/überholt — Basis zurückgedreht: \(pid, privacy: .public)")
     }
 }

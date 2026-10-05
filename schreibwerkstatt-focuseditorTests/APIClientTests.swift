@@ -74,12 +74,49 @@ final class APIClientTests: XCTestCase {
         XCTAssertTrue(r.ok)
     }
 
+    /// Ein Server unter einem Pfad (`https://host/sw`) behält den Pfad — die
+    /// relative Auflösung mit führendem `/` hatte ihn durch die Wurzel ersetzt.
+    func testKeepsPathOfServerBaseURL() async throws {
+        ServerConfig.baseURLString = "http://127.0.0.1:3737/sw"
+        let client = makeClient { req in
+            XCTAssertEqual(req.url?.absoluteString, "http://127.0.0.1:3737/sw/me/device-tokens?x=1")
+            return (self.response(200, for: req), Data(#"{"ok":true}"#.utf8))
+        }
+        _ = try await client.send("/me/device-tokens?x=1", decode: OK.self)
+    }
+
+    // MARK: - Namespace-Slug
+
+    /// Eindeutige Hosts behalten die bisherige Form (kein Umzug bestehender Daten).
+    func testNamespaceSlugUnchangedForUnambiguousHosts() {
+        XCTAssertEqual(ServerNamespace.slug(for: URL(string: "https://schreibwerkstatt.app")),
+                       "https_schreibwerkstatt-app")
+        XCTAssertEqual(ServerNamespace.slug(for: URL(string: "http://127.0.0.1:3737")),
+                       "http_127-0-0-1_3737")
+    }
+
+    /// `a-b.example.com` und `a.b.example.com` (bzw. zwei Pfade desselben Hosts)
+    /// dürfen sich keinen Namespace teilen.
+    func testNamespaceSlugDisambiguatesDashesAndPaths() {
+        let dashed = ServerNamespace.slug(for: URL(string: "https://a-b.example.com"))
+        let dotted = ServerNamespace.slug(for: URL(string: "https://a.b.example.com"))
+        XCTAssertNotEqual(dashed, dotted)
+        let p1 = ServerNamespace.slug(for: URL(string: "https://host.example/eins"))
+        let p2 = ServerNamespace.slug(for: URL(string: "https://host.example/zwei"))
+        XCTAssertNotEqual(p1, p2)
+        XCTAssertEqual(dashed, ServerNamespace.slug(for: URL(string: "https://a-b.example.com")),
+                       "stabil über Aufrufe hinweg")
+    }
+
     // MARK: - 401
 
     func testUnauthorizedTriggersCallbackAndThrows() async {
         let client = makeClient { req in (self.response(401, for: req), Data()) }
         let expectation = expectation(description: "onUnauthorized aufgerufen")
-        client.onUnauthorized = { expectation.fulfill() }
+        client.onUnauthorized = { used in
+            XCTAssertEqual(used, "swd_token", "meldet das Token des abgewiesenen Requests")
+            expectation.fulfill()
+        }
 
         do {
             _ = try await client.send("/me/device-tokens", decode: OK.self)

@@ -24,8 +24,10 @@ protocol EditorCoordinating: AnyObject {
     var openPageId: String? { get }
     /// Hat die Seite ungespeicherte Editor-Änderungen (dirty)?
     func isDirty(_ pageId: String) -> Bool
-    /// Lädt die saubere, offene Seite still in der WebView neu (Swift→JS).
-    func reloadPage(pageId: String, html: String, baseUpdatedAt: Double) async
+    /// Lädt die offene Seite still in der WebView neu (Swift→JS). `true` nur,
+    /// wenn der Editor den Reload übernommen hat (s. `EditorBridge.reloadPage`).
+    @discardableResult
+    func reloadPage(pageId: String, html: String, baseUpdatedAt: Double, force: Bool) async -> Bool
     /// 3-Wege-Block-Merge in der WebView. Wirft, wenn nicht verfügbar
     /// (kein Editor-Bundle / keine WebView) — Aufrufer behandelt das als Konflikt.
     func merge3(base: String?, local: String, server: String) async throws -> MergeOutcome

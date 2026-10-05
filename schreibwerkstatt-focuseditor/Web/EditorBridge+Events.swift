@@ -50,22 +50,34 @@ extension EditorBridge {
 
     /// Führt JS in der Seite aus und liefert das Ergebnis. Wirft
     /// `BridgeError.webViewUnavailable` ohne WebView bzw. `timeoutError` bei
-    /// Zeitüberschreitung (Race gegen einen `Task.sleep`).
+    /// Zeitüberschreitung.
+    ///
+    /// Bewusst KEINE Task-Group: die wartet beim Verlassen auf ALLE Kinder, und
+    /// `callAsyncJavaScript` reagiert nicht auf Abbruch — ein nie erfüllendes
+    /// JS-Promise hielte den Aufrufer trotz Timeout fest (⌘Q-Frist, ⌘S-Vorlauf,
+    /// 409-Merge). Stattdessen zwei freie Tasks, von denen der erste die
+    /// Continuation genau einmal erfüllt; der JS-Aufruf darf danach ins Leere
+    /// weiterlaufen.
     func evaluateJS(_ script: String, arguments: [String: Any] = [:],
                     timeout: Duration = EditorBridge.jsCallTimeout,
                     timeoutError: BridgeError = .jsTimedOut("JS")) async throws -> Any? {
         guard let webView else { throw BridgeError.webViewUnavailable }
-        return try await withThrowingTaskGroup(of: Any?.self) { group in
-            group.addTask { @MainActor in
-                try await webView.callAsyncJavaScript(script, arguments: arguments,
-                                                     in: nil, contentWorld: .page)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any?, Error>) in
+            let gate = ResumeOnce(continuation)
+            let timer = Task {
+                try? await Task.sleep(for: timeout)
+                gate.resume(with: .failure(timeoutError))
             }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw timeoutError
+            Task {
+                do {
+                    let value = try await webView.callAsyncJavaScript(script, arguments: arguments,
+                                                                      in: nil, contentWorld: .page)
+                    gate.resume(with: .success(value))
+                } catch {
+                    gate.resume(with: .failure(error))
+                }
+                timer.cancel()
             }
-            defer { group.cancelAll() }
-            return try await group.next() ?? nil
         }
     }
 
@@ -101,10 +113,25 @@ extension EditorBridge {
 
     // MARK: - Seiten-Events
 
-    /// Lädt die saubere, offene Seite still in der WebView neu (`serverUpdate`).
-    func reloadPage(pageId: String, html: String, baseUpdatedAt: Double) async {
-        await emit("serverUpdate", ["pageId": pageId, "html": html,
-                                    "baseUpdatedAt": baseUpdatedAt])
+    /// Lädt die offene Seite still in der WebView neu (`_serverUpdate`). Der
+    /// Editor prüft dabei SELBST, ob die Seite noch offen und unberührt ist —
+    /// Swifts `openPageId`/`isDirty` kommen über die IPC und sind immer etwas
+    /// alt. Liefert `true` nur, wenn der Reload wirklich übernommen wurde; bei
+    /// `false` (inzwischen getippt, andere Seite, keine WebView, Timeout) muss
+    /// der Aufrufer die Sync-Basis zurückdrehen, sonst überschriebe der nächste
+    /// Push den Server-Stand ohne Merge. `force` (Konflikt „Server übernehmen")
+    /// ersetzt auch eine dirty Seite — aber nur, wenn sie noch offen ist.
+    @discardableResult
+    func reloadPage(pageId: String, html: String, baseUpdatedAt: Double, force: Bool) async -> Bool {
+        guard webView != nil else { return false }
+        let result = await callJS("serverUpdate", """
+            const fb = window.__focusBridge;
+            if (!fb || typeof fb._serverUpdate !== 'function') { return false; }
+            return (await fb._serverUpdate(payload)) === true;
+            """,
+            arguments: ["payload": ["pageId": pageId, "html": html,
+                                    "baseUpdatedAt": baseUpdatedAt, "force": force]])
+        return (result as? Bool) ?? false
     }
 
     /// Öffnet eine (beliebige) Seite im Editor — vom nativen Picker getrieben.
@@ -280,5 +307,22 @@ extension EditorBridge {
         }
         let count = Self.clampedCount(dict["conflictCount"])
         return MergeOutcome(merged: merged, conflictCount: count)
+    }
+}
+
+/// Erfüllt eine Continuation genau einmal — der Wettlauf zwischen JS-Antwort und
+/// Timeout in `evaluateJS` darf nicht doppelt resumen (Absturz).
+@MainActor
+private final class ResumeOnce {
+    private var continuation: CheckedContinuation<Any?, Error>?
+
+    init(_ continuation: CheckedContinuation<Any?, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(with result: Result<Any?, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(with: result)
     }
 }

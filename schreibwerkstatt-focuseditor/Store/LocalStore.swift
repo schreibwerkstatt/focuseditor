@@ -105,6 +105,21 @@ protocol LocalStore: AnyObject {
     @discardableResult
     func applyServerPageIfClean(id: String, html: String, pageName: String?, bookId: Int?, chapterId: Int?, serverUpdatedAtMillis: Double) async throws -> Bool
 
+    /// Übernimmt das Ergebnis eines erfolgreich gepushten Auto-Merges: schreibt
+    /// `html` als Server-Stand in den Spiegel UND quittiert den Outbox-Eintrag —
+    /// beides nur, wenn der Eintrag seit `queuedAt` unverändert ist, in EINER
+    /// Transaktion. `false` = inzwischen ein neuerer lokaler Save: dann bleiben
+    /// Seitenzeile und Eintrag unangetastet (der neuere Stand darf nicht vom
+    /// Merge-Ergebnis überschrieben werden, das seine jüngsten Zeichen nicht kennt).
+    @discardableResult
+    func applyMergedPush(id: String, html: String, queuedAt: Double, serverUpdatedAtMillis: Double) async throws -> Bool
+
+    /// Löscht die Seite (wie `deletePage`), aber nur, wenn KEIN Outbox-Eintrag
+    /// vorliegt — Prüfung und Löschen in EINER Transaktion. `false` = lokale
+    /// ungepushte Änderung vorhanden, nichts gelöscht.
+    @discardableResult
+    func deletePageIfClean(id: String) async throws -> Bool
+
     /// Merge-Ancestor der Seite: das Server-HTML der letzten bekannten Basis, also
     /// der gemeinsame Vorfahr für den 3-Wege-Block-Merge bei 409. `nil`, solange
     /// keiner bekannt ist (dann ist kein 3-Wege-Merge möglich → Konflikt-UI).
@@ -144,6 +159,27 @@ protocol LocalStore: AnyObject {
     /// Bridge) bleiben gültig. So pollt der Sync nach einem Server-Wechsel nicht
     /// mehr die Buch-IDs des alten Servers.
     func switchToCurrentServer() async throws
+}
+
+/// Fallbacks für Spiegel ohne eigene Transaktion (Test-Fakes): dieselbe
+/// Semantik aus den Einzel-Operationen zusammengesetzt. Die echten Stores
+/// (`GRDBLocalStore`, `InMemoryLocalStore`) überschreiben beide atomar.
+extension LocalStore {
+    @discardableResult
+    func applyMergedPush(id: String, html: String, queuedAt: Double, serverUpdatedAtMillis: Double) async throws -> Bool {
+        guard let entry = try await pendingOutbox().first(where: { $0.pageId == id }),
+              entry.queuedAt == queuedAt else { return false }
+        try await applyServerPage(id: id, html: html, pageName: nil, bookId: nil, chapterId: nil,
+                                  serverUpdatedAtMillis: serverUpdatedAtMillis)
+        return try await markPushed(id: id, queuedAt: queuedAt, serverUpdatedAtMillis: serverUpdatedAtMillis)
+    }
+
+    @discardableResult
+    func deletePageIfClean(id: String) async throws -> Bool {
+        if try await pendingOutbox().contains(where: { $0.pageId == id }) { return false }
+        try await deletePage(id: id)
+        return true
+    }
 }
 
 /// Titel-Ableitung aus dem HTML — von allen LocalStore-Implementierungen
@@ -331,6 +367,24 @@ final class InMemoryLocalStore: LocalStore {
                                 bookId: bookId, chapterId: chapterId,
                                 serverUpdatedAtMillis: serverUpdatedAtMillis)
         persistSnapshot()
+        return true
+    }
+
+    @discardableResult
+    func applyMergedPush(id: String, html: String, queuedAt: Double, serverUpdatedAtMillis: Double) async throws -> Bool {
+        guard let idx = outbox.firstIndex(where: { $0.pageId == id }),
+              outbox[idx].queuedAt == queuedAt else { return false }
+        outbox.remove(at: idx)
+        applyServerPageInternal(id: id, html: html, pageName: nil, bookId: nil, chapterId: nil,
+                                serverUpdatedAtMillis: serverUpdatedAtMillis)
+        persistSnapshot()
+        return true
+    }
+
+    @discardableResult
+    func deletePageIfClean(id: String) async throws -> Bool {
+        guard !outbox.contains(where: { $0.pageId == id }) else { return false }
+        try await deletePage(id: id)
         return true
     }
 

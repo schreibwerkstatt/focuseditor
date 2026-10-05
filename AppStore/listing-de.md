@@ -43,7 +43,7 @@ Fokussiert schreiben, offline
 ## Promotional Text (max. 170, ohne Review änderbar)
 
 ```
-Eine Seite, eine Schreiblinie, sonst nichts. Deine Texte liegen zuerst lokal auf dem Mac und synchronisieren sich mit deinem Schreibwerkstatt-Konto, sobald Netz da ist.
+Ein Abschnitt, eine Schreiblinie, sonst nichts. Deine Texte liegen zuerst lokal auf dem Mac und gleichen sich mit deinem Schreibwerkstatt-Konto ab, sobald Netz da ist.
 ```
 
 ## Keywords (max. 100, kommagetrennt, keine Leerzeichen nach Komma)
@@ -59,19 +59,19 @@ Beschreibung.
 ## Beschreibung (max. 4000)
 
 ```
-Focuseditor ist der ablenkungsfreie Schreibmodus der Schreibwerkstatt als native Mac-App: eine Seite, eine Schreiblinie, sonst nichts. Kein Buchorganizer, keine Analysekarten, keine Werkzeugleisten-Wüste — nur der Text, an dem du gerade arbeitest.
+Focuseditor ist der ablenkungsfreie Schreibmodus der Schreibwerkstatt als native Mac-App: ein Abschnitt, eine Schreiblinie, sonst nichts. Kein Buchorganizer, keine Analysekarten, keine Werkzeugleisten-Wüste — nur der Text, an dem du gerade arbeitest.
 
 BEGLEIT-APP — BITTE VOR DEM LADEN LESEN
 Focuseditor gehört zur Schreibwerkstatt (schreibwerkstatt.app) und braucht ein Konto auf einem Schreibwerkstatt-Server. Einen eigenständigen Modus ohne Server gibt es nicht. Zum Ausprobieren ist ein Demo-Zugang eingebaut: ein Klick im Anmeldefenster, ohne eigenes Konto.
 
 ZUERST LOKAL, DANN SYNC
-Jeder Tastendruck landet zuerst in einem lokalen Speicher auf deinem Mac — nicht im Netz. Die App wartet nie auf eine Verbindung. Im Hintergrund gleicht sie ab, sobald Netz da ist; nach dem ersten Start arbeitest du vollständig offline weiter, im Zug genauso wie am Schreibtisch. Ändern sich dieselbe Seite hier und anderswo, führt die App die Absätze zusammen, statt eine Fassung zu überschreiben.
+Jeder Tastendruck landet zuerst in einem lokalen Speicher auf deinem Mac — nicht im Netz. Die App wartet nie auf eine Verbindung. Im Hintergrund gleicht sie ab, sobald Netz da ist; nach dem ersten Start arbeitest du vollständig offline weiter, im Zug genauso wie am Schreibtisch. Ändert sich derselbe Abschnitt hier und anderswo, führt die App die Absätze zusammen, statt eine Fassung zu überschreiben.
 
 FOKUS
 • Schreibmaschinen-Modus: die aktive Zeile bleibt ruhig auf der Schreiblinie
 • Umgebung abdunkeln — wahlweise alles ausser der Schreibzeile oder ein Fenster von drei Absätzen
 • Vollbild mit Werkzeugleiste, die sich von selbst wegblendet
-• Seiten öffnen über einen Picker mit „Zuletzt geöffnet“ (⌘O)
+• Abschnitte öffnen über einen Picker mit „Zuletzt geöffnet“ (⌘O)
 
 TYPOGRAFIE, DIE DU EINSTELLST
 Schriftart und -grösse, Zeilenhöhe, Spaltenbreite und Papierton — vom hellen Papier bis zum dunklen Schreibtisch. Hell, dunkel oder dem System folgend.
@@ -81,7 +81,7 @@ HILFE BEIM SCHREIBEN
 • Synonyme mit ⌘⇧S: Thesaurus und KI-Vorschläge, passend zum Satz
 • Anführungszeichen auf den Stil des Buchs ziehen — «Schweiz», „Deutschland“ oder “englisch”
 • Wortzahl, Lesezeit, Tagesziel und Schreibzeit im Blick
-• Lektorat der offenen Seite anstossen, das auf deinem Server läuft
+• Lektorat des offenen Abschnitts anstossen, das auf deinem Server läuft
 
 AUF DEM MAC ZU HAUSE
 Deutsch und Englisch, Tastaturkürzel-Übersicht mit ⌘?, Dunkelmodus, Vollbild, Kontextmenü — eine echte Mac-App, kein Browserfenster im Anzug.

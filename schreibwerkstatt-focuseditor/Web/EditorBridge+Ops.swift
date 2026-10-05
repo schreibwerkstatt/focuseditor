@@ -119,6 +119,10 @@ extension EditorBridge {
         let html = try requireString(params, "html", maxLength: Self.maxHtmlLength,
                                      allowEmpty: true)
         let base = optTimestamp(params, "baseUpdatedAt")
+        guard !deletedPageIds.contains(pageId) else {
+            log.info("Save für gelöschte Seite verworfen: \(pageId, privacy: .public)")
+            return nil
+        }
         do {
             let saved = try await store.save(id: pageId, html: html, baseUpdatedAt: base)
             // Erfolgreicher Save → einen zuvor gezeigten Save-Fehler-Banner lösen.
@@ -198,9 +202,13 @@ extension EditorBridge {
     private func opReportStats(_ params: [String: Any]) {
         let words = Self.clampedCount(params["words"])
         let chars = Self.clampedCount(params["chars"])
-        onStats?(optPageId(params, "pageId"), words, chars)
-        // Jede Meldung ist ein Lebenszeichen → Idle-Uhr der Schreibzeit zurück.
-        onActivity?()
+        // Fehlt das Flag (älterer Glue), wie bisher als Eingabe werten.
+        let typed = (params["typed"] as? Bool) ?? true
+        onStats?(optPageId(params, "pageId"), words, chars, typed)
+        // Nur echte Eingabe ist ein Lebenszeichen → Idle-Uhr der Schreibzeit
+        // zurück. Ein stiller Server-Refresh (Änderung von einem anderen Gerät)
+        // hielte die Schreibzeit sonst endlos am Laufen.
+        if typed { onActivity?() }
     }
 
     // MARK: - Widerrufen / Wiederherstellen (WebKit-Undo)
@@ -284,16 +292,16 @@ extension EditorBridge {
                                                               bookId: resp.book_id, chapterId: resp.chapter_id,
                                                               serverUpdatedAtMillis: ms)
         // Sync-Basis setzen (Merge-Ancestor + ISO-Basis), damit der nächste Push
-        // gegen eine gültige Basis läuft. Bei `applied == true` steht das HTML
-        // bereits im Store; bei `applied == false` (Outbox blockiert) muss das
-        // Server-HTML direkt übergeben werden — der Store hält sonst das lokale
-        // HTML, und der Merge-Ancestor würde falsch gesetzt.
-        // Verhindert den Deadlock: Outbox-Eintrag vorhanden → Pull überspringt →
-        // Basis würde nie gesetzt → Push überspringt ewig (keine serverBaseISO).
+        // gegen eine gültige Basis läuft — aber NUR, wenn der Server-Stand
+        // wirklich übernommen wurde. Bei `applied == false` (inzwischen eine
+        // lokale Änderung in der Outbox) wäre „Basis = Server jetzt" ein stilles
+        // Last-Write-Wins: der Push ginge ohne 409 durch und überschriebe den
+        // Server. Den Fall löst `SyncEngine.repairStalledSyncBases` sicher auf
+        // (Basis nur bei unverändertem Server, sonst Merge).
         if applied == true {
             try? await store.setServerBaseHtml(html, id: pageId)
+            await onSetSyncBase?(pageId, resp.updated_at, html)
         }
-        await onSetSyncBase?(pageId, resp.updated_at, html)
         return try? await store.page(id: pageId)
     }
 }

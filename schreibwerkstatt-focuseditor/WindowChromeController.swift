@@ -65,8 +65,22 @@ final class WindowChromeController: ObservableObject {
         self.window = window
         guard let window else { return }
 
+        // Neues NSWindow (Schreibfenster geschlossen und über ⌘0 wieder
+        // geöffnet): das Accessory hängt noch am ALTEN Fenster. Ohne Umzug
+        // brach `installToolbar` am `toolbarAccessory == nil`-Guard ab, und das
+        // neue Fenster hatte keine Toolbar (Abmelden, Seite schliessen,
+        // Sync-Status … unerreichbar). Die Host-View wandert mit.
+        var host = toolbarHost
+        if let old = toolbarAccessory, old.view.window !== window {
+            let oldHost = old.view
+            old.removeFromParent()
+            oldHost.removeFromSuperview()
+            toolbarAccessory = nil
+            if host == nil { host = oldHost }
+        }
+
         applyBaseChrome(window)
-        installToolbar(toolbarHost, in: window)
+        installToolbar(host, in: window)
 
         let center = NotificationCenter.default
         fullscreenObservers = [

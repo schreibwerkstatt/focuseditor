@@ -27,6 +27,7 @@ extension AppCore {
     /// Objekt-Identitäten bleiben erhalten (Store/Sync/Library tauschen nur ihre
     /// zugrundeliegenden Dateien) → Bridge- und Controller-Bindungen bleiben gültig.
     func switchServer() async {
+        await closeOpenPageBeforeRebind()
         // Sync VOR dem Store-Tausch anhalten und einen laufenden Durchlauf
         // abwarten — sonst committet ein in-flight DB-Write evtl. noch in die
         // alte Namespace-DB (Datenverlust für den neuen Server).
@@ -66,6 +67,7 @@ extension AppCore {
     /// eine frische (leere) DB am selben Pfad öffnen und Sync/Library darauf neu
     /// aufsetzen — die Objekt-Identitäten bleiben gültig (Bridge-Bindungen etc.).
     func purgeLocalDataForCurrentServer() async {
+        await closeOpenPageBeforeRebind()
         await sync.suspendForServerSwitch()
         lektorat.reset()
         // Löschen und Verwerfen des Schreibzeit-Puffers ohne `await` dazwischen:
@@ -86,15 +88,36 @@ extension AppCore {
     /// Ein fehlgeschlagenes Öffnen wird geloggt, aber nicht geworfen: Sync und
     /// Library müssen trotzdem umgestellt werden, sonst arbeiteten sie mit den
     /// Buch-IDs des alten Servers weiter (→ `NO_BOOK_ACCESS`-Flut).
+    ///
+    /// Scheitert das Öffnen, hält der Store weiter die DB des ALTEN Servers. Der
+    /// Sync bleibt dann angehalten (`haltAfterFailedStoreSwitch`): mit dem
+    /// Sync-Zustand des neuen Servers gegen die Outbox des alten liefe sonst ein
+    /// fremder Seitenstand bei gleicher Seiten-ID als Push durch. Die Bindung
+    /// bleibt unvermerkt, damit der nächste Sign-in den Wechsel erneut versucht.
     private func rebindStoresToCurrentServer(context: String) async {
         do {
             try await store.switchToCurrentServer()
         } catch {
             AppLog.store.error("\(context, privacy: .public): Store nicht öffenbar — \(error.localizedDescription, privacy: .public)")
+            sync.haltAfterFailedStoreSwitch()
+            library.reloadForCurrentServer()
+            return
         }
         sync.reloadForCurrentServer()
         library.reloadForCurrentServer()
         boundSlug = ServerNamespace.currentSlug
+    }
+
+    /// Vor jedem Umhängen des Spiegels: den offenen Draft sichern (awaitbar) und
+    /// die Seite im Editor schliessen. Sonst bliebe die Seite des alten Servers
+    /// in der Schreibfläche stehen, während die Toolbar schon „keine Seite"
+    /// zeigt — und ihr nächster Autosave landete im Spiegel des NEUEN Servers.
+    /// Der Save des Close-Handlers ist nach dem Flush ein No-op (Inhalt
+    /// unverändert).
+    private func closeOpenPageBeforeRebind() async {
+        guard bridge.openPageId != nil else { return }
+        await bridge.flushDraftSave()
+        await bridge.closePage()
     }
 
     /// Lokalen Spiegel manuell zurücksetzen (auf Nutzerwunsch): Alle lokalen
@@ -106,6 +129,7 @@ extension AppCore {
     /// Ablauf wie `purgeLocalDataForCurrentServer`, aber ohne Konto-Löschung.
     /// Der Sync baut den Spiegel beim nächsten Tick frisch aus dem Server auf.
     func resetLocalMirror() async {
+        await closeOpenPageBeforeRebind()
         await sync.suspendForServerSwitch()
         lektorat.reset()
         writingTime.reset()

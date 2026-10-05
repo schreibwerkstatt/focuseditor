@@ -14,8 +14,16 @@
 import Foundation
 
 /// Leitet einen stabilen, dateisystem-sicheren Slug aus der Server-Basis-URL
-/// ab. Scheme + Host + Port unterscheiden Server (`http://127.0.0.1:3737` ist
-/// ein anderer Bestand als `https://prod`).
+/// ab. Scheme + Host + Port (+ Pfad) unterscheiden Server (`http://127.0.0.1:3737`
+/// ist ein anderer Bestand als `https://prod`).
+///
+/// Eindeutigkeit: die Grundform bildet Punkte auf `-` ab. Für Hosts ohne `-`/`_`
+/// und ohne Pfad ist das eindeutig — sie behalten die Grundform (alle bisher
+/// bekannten Server, keine Migration). Sonst teilten sich `a-b.example.com` und
+/// `a.b.example.com` (bzw. zwei Server unter verschiedenen Pfaden desselben
+/// Hosts) Spiegel, Sync-Zustand und den Purge der Konto-Löschung. Diese Fälle
+/// bekommen einen Hash-Zusatz `_h<8 hex>`; ein Bestand unter der alten
+/// Grundform wird beim ersten Zugriff einmalig umgezogen (s. `migrate`).
 enum ServerNamespace {
     /// Slug der aktuell konfigurierten Server-Basis-URL.
     static var currentSlug: String { slug(for: ServerConfig.baseURL) }
@@ -24,6 +32,19 @@ enum ServerNamespace {
     /// Fallback, damit nie ein leerer Pfadbestandteil entsteht).
     static func slug(for url: URL?) -> String {
         guard let url, let host = url.host, !host.isEmpty else { return "default" }
+        let legacy = legacySlug(for: url, host: host)
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let ambiguous = host.contains("-") || host.contains("_") || !path.isEmpty
+        guard ambiguous else { return legacy }
+        let identity = "\((url.scheme ?? "http").lowercased())://\(host.lowercased())"
+            + (url.port.map { ":\($0)" } ?? "") + "/" + path
+        let slug = legacy + "_h" + shortHash(identity)
+        migrate(from: legacy, to: slug)
+        return slug
+    }
+
+    /// Die bisherige Grundform (`scheme_host[_port]`, Punkte → `-`).
+    private static func legacySlug(for url: URL, host: String) -> String {
         let scheme = (url.scheme ?? "http").lowercased()
         let port = url.port.map { "_\($0)" } ?? ""
         let raw = "\(scheme)_\(host)\(port)".lowercased()
@@ -32,6 +53,47 @@ enum ServerNamespace {
             (c.isLetter || c.isNumber || c == "_" || c == "-") ? c : "-"
         })
         return safe.isEmpty ? "default" : safe
+    }
+
+    /// FNV-1a (64 Bit) → 8 Hex-Zeichen. Stabil über App-Starts und -Versionen
+    /// (anders als `Hasher`, der pro Prozess zufällig gesalzen ist).
+    private static func shortHash(_ s: String) -> String {
+        var h: UInt64 = 0xcbf29ce484222325
+        for byte in s.utf8 {
+            h ^= UInt64(byte)
+            h = h &* 0x100000001b3
+        }
+        return String(format: "%08x", UInt32(truncatingIfNeeded: h ^ (h >> 32)))
+    }
+
+    /// Schon geprüfte Ziel-Slugs dieses Prozesses (die Migration läuft je Slug
+    /// höchstens einmal — `currentSlug` wird sehr oft gelesen).
+    private static var migrationChecked: Set<String> = []
+
+    /// Einmaliger Umzug eines Bestands von der alten Grundform auf den
+    /// eindeutigen Slug: Ordner `servers/<legacy>/` und die Defaults-Schlüssel
+    /// `….<legacy>`. Nur, wenn am Ziel noch nichts liegt — ein vorhandener
+    /// Bestand wird nie überschrieben. Läuft vor dem ersten Öffnen der DB, weil
+    /// jeder Pfad dorthin erst den Slug berechnet.
+    private static func migrate(from legacy: String, to slug: String) {
+        guard migrationChecked.insert(slug).inserted else { return }
+        let fm = FileManager.default
+        let servers = AppSupport.baseDir().appendingPathComponent("servers", isDirectory: true)
+        let from = servers.appendingPathComponent(legacy, isDirectory: true)
+        let to = servers.appendingPathComponent(slug, isDirectory: true)
+        guard fm.fileExists(atPath: from.path), !fm.fileExists(atPath: to.path) else { return }
+        do {
+            try fm.moveItem(at: from, to: to)
+        } catch {
+            return   // nichts halb umziehen: ohne Ordner auch keine Schlüssel
+        }
+        let defaults = UserDefaults.standard
+        let suffix = "." + legacy
+        for (key, value) in defaults.dictionaryRepresentation() where key.hasSuffix(suffix) {
+            let newKey = String(key.dropLast(suffix.count)) + "." + slug
+            if defaults.object(forKey: newKey) == nil { defaults.set(value, forKey: newKey) }
+            defaults.removeObject(forKey: key)
+        }
     }
 }
 

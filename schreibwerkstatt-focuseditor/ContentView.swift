@@ -255,12 +255,14 @@ private struct EditorHostView: View {
         }
     }
 
-    /// Nach einer wiederhergestellten Revision: den frischen Server-Stand ziehen
-    /// (der Restore schrieb serverseitig eine neue Fassung) — der Open-Page-Pull
-    /// lädt die saubere offene Seite in der WebView still neu.
+    /// Nach einer wiederhergestellten Revision: den frischen Server-Stand
+    /// VERBINDLICH übernehmen (der Restore schrieb serverseitig eine neue
+    /// Fassung). Ein gewöhnlicher Pull übersprünge eine dirty Seite oder eine
+    /// mit Outbox-Eintrag — und der lokale Stand drehte die Wiederherstellung
+    /// beim nächsten Push wieder zurück.
     private func reloadAfterRestore() {
         guard let pageId = library.openPageId else { return }
-        Task { await sync.pullPage(pageId: String(pageId)) }
+        Task { await sync.adoptServerStateAfterRestore(pageId: String(pageId)) }
     }
 }
 

@@ -175,8 +175,12 @@ private final class FakeEditor: EditorCoordinating {
     private(set) var reloaded: [(pageId: String, html: String)] = []
 
     func isDirty(_ pageId: String) -> Bool { dirtyPages.contains(pageId) }
-    func reloadPage(pageId: String, html: String, baseUpdatedAt: Double) async {
+    /// Test-Hook: lehnt der Editor den stillen Reload ab (inzwischen getippt)?
+    var declineReload = false
+    func reloadPage(pageId: String, html: String, baseUpdatedAt: Double, force: Bool) async -> Bool {
+        if declineReload && !force { return false }
         reloaded.append((pageId, html))
+        return true
     }
     func merge3(base: String?, local: String, server: String) async throws -> MergeOutcome {
         await onMerge?()
@@ -701,7 +705,10 @@ final class SyncEngineTests: XCTestCase {
         let bookId = 7
 
         // Seite im Store anlegen (simuliert fetchAndMirror) — MIT Buch (keine Waise).
-        _ = try await store.save(id: pageId, html: "<p>lokal</p>", baseUpdatedAt: nil)
+        // Die lokale Änderung beruht auf genau dem Server-Stand, den der GET liefert
+        // (Server seitdem unverändert) → die Basis darf gefahrlos gesetzt werden.
+        _ = try await store.save(id: pageId, html: "<p>lokal</p>",
+                                 baseUpdatedAt: ISOTime.millis(serverUpdatedAt))
         try await store.assignBook(pageId: pageId, bookId: bookId, chapterId: nil)
 
         let engine = makeEngine(store: store)
@@ -719,6 +726,73 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(engine.stateStore.state.serverBaseISO[pageId], serverUpdatedAt)
         let ancestor = try await store.serverBaseHtml(id: pageId)
         XCTAssertEqual(ancestor, serverHtml)
+    }
+
+    /// Hat sich der Server seit der Basis der lokalen Änderung bewegt (oder ist
+    /// die lokale Basis unbekannt), darf die Reparatur die Basis NICHT einfach
+    /// auf „Server jetzt" stellen — der nächste Push ginge ohne 409 durch und
+    /// überschriebe die fremde Änderung. Stattdessen Merge; ohne Editor → Konflikt.
+    func testRepairStalledSyncBasesMergesWhenServerMoved() async throws {
+        let store = FakeStore()
+        _ = try await store.save(id: "42", html: "<p>lokal</p>",
+                                 baseUpdatedAt: ISOTime.millis(base))
+        try await store.assignBook(pageId: "42", bookId: 7, chapterId: nil)
+        let engine = makeEngine(store: store)
+        router.on("GET", "/content/pages/42",
+                  [push(200, #"{"id":42,"updated_at":"\#(newer)","html":"<p>fremd</p>","book_id":7}"#)])
+
+        await engine.repairStalledSyncBases()
+
+        XCTAssertNil(engine.stateStore.state.serverBaseISO["42"], "keine blinde Basis auf den bewegten Server-Stand")
+        XCTAssertEqual(engine.conflicts.map(\.pageId), ["42"], "ohne Editor → sichtbarer Konflikt statt Überschreiben")
+        let pending = try await store.pendingOutbox()
+        XCTAssertEqual(pending.map(\.pageId), ["42"], "lokaler Stand bleibt")
+    }
+
+    /// Lehnt der Editor den stillen Reload ab (inzwischen getippt), muss die
+    /// Sync-Basis zurück auf den alten Stand — sonst pushte der nächste Save
+    /// den alten Text + Tippen gegen die NEUE Basis und überschriebe die
+    /// Server-Änderung ohne Merge.
+    func testPullRevertsBaseWhenEditorDeclinesReload() async throws {
+        let store = FakeStore()
+        store.seedServerPage(id: "7", html: "<p>alt</p>", bookId: 1, updatedAt: 1)
+        store.ancestors["7"] = "<p>alt</p>"
+        let editor = FakeEditor()
+        editor.openPageId = "7"
+        editor.declineReload = true
+        let engine = makeEngine(store: store, editor: editor)
+        engine.stateStore.mutate { $0.serverBaseISO["7"] = base }
+        seedBook(engine, ids: [1])
+        router.on("GET", "/content/books/1/sync", [push(200, #"""
+            {"now":"\#(newer)","has_more":false,"cursor":{"since":"\#(newer)","since_id":7},
+             "pages":[{"page_id":7,"page_name":"P7","chapter_id":null,"updated_at":"\#(newer)","html":"<p>neu</p>"}]}
+            """#)])
+
+        try await engine.pullDeltas()
+
+        XCTAssertEqual(engine.stateStore.state.serverBaseISO["7"], base, "Basis zurückgedreht")
+        XCTAssertEqual(store.ancestors["7"], "<p>alt</p>", "Ancestor zurückgedreht")
+        XCTAssertTrue(editor.reloaded.isEmpty)
+    }
+
+    /// Übernimmt der Editor den Reload, bleibt die neue Basis stehen.
+    func testPullKeepsBaseWhenEditorAcceptsReload() async throws {
+        let store = FakeStore()
+        store.seedServerPage(id: "7", html: "<p>alt</p>", bookId: 1, updatedAt: 1)
+        let editor = FakeEditor()
+        editor.openPageId = "7"
+        let engine = makeEngine(store: store, editor: editor)
+        engine.stateStore.mutate { $0.serverBaseISO["7"] = base }
+        seedBook(engine, ids: [1])
+        router.on("GET", "/content/books/1/sync", [push(200, #"""
+            {"now":"\#(newer)","has_more":false,"cursor":{"since":"\#(newer)","since_id":7},
+             "pages":[{"page_id":7,"page_name":"P7","chapter_id":null,"updated_at":"\#(newer)","html":"<p>neu</p>"}]}
+            """#)])
+
+        try await engine.pullDeltas()
+
+        XCTAssertEqual(engine.stateStore.state.serverBaseISO["7"], newer)
+        XCTAssertEqual(editor.reloaded.map(\.html), ["<p>neu</p>"])
     }
 
     /// `repairStalledSyncBases` überspringt Seiten, die bereits eine Basis haben

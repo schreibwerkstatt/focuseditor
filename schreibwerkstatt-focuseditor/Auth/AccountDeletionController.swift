@@ -83,7 +83,7 @@ final class AccountDeletionController: ObservableObject {
                 await onDeleted?()
                 phase = .done(purgeAt: purgeAt)
 
-            case 404 where error?.error_code == nil, 405, 501:
+            case 404 where error?.error_code == nil, 405:
                 // Kein `error_code` → generischer Express-404: die Route gibt es
                 // auf diesem Server (noch) nicht. Ein fachliches 404 mit Code
                 // (z. B. USER_NOT_FOUND) fällt in den Standardzweig.
@@ -100,6 +100,12 @@ final class AccountDeletionController: ObservableObject {
                                                  body: nil).errorDescription
                                 ?? t("settings.account.deleteFailedGeneric"))
             }
+        } catch AuthError.server(let status, _, _) where status == 501 {
+            // 5xx wirft `sendExpectingJSON` (der Status-`switch` oben sieht ihn
+            // nie) — 501 heisst aber „Route nicht implementiert", nicht „kaputt":
+            // dann den Browser-Weg anbieten statt einer Fehler-Sackgasse.
+            logger.notice("Server ohne /me/account-Löschroute (Status 501)")
+            phase = .unsupported
         } catch AuthError.unauthorized {
             // Token ungültig/widerrufen — die AuthStore hat die Session bereits
             // beendet. Lokale Inhalte bleiben (Datenverlust-Schutz).

@@ -240,12 +240,21 @@ final class LibraryStore: ObservableObject {
         // Offene Seite sofort schliessen (Toolbar leert sich), dann den Editor
         // leeren und den Picker mit den Seiten des neuen Buchs öffnen.
         openPageId = nil
+        dismissHistoryNotice()
+        // Seitenliste des alten Buchs sofort weg — sonst könnte ein Picker, der
+        // vor dem Laden aufgeht, eine Seite des ALTEN Buchs öffnen.
+        pages = []
+        pageStats = [:]
         // Picker sofort ausblenden + Lade-Donut zeigen; erst nach geladener
         // Seitenliste den Picker des neuen Buchs wieder öffnen.
         isSwitchingBook = true
         Task {
             await bridge.closePage()
             await refreshPages()
+            // Zwischenzeitlich schon das nächste Buch gewählt (A→B→C bei langsamem
+            // Netz)? Dann gehört der Abschluss dem jüngsten Wechsel — sonst öffnete
+            // dieser Task den Picker mit den Seiten von B, während C aktiv ist.
+            guard activeBookId == id else { return }
             isSwitchingBook = false
             pickerOpenRequest &+= 1
         }
@@ -350,6 +359,9 @@ final class LibraryStore: ObservableObject {
     /// Hebt die gewählte Seite über die Bridge in den Editor.
     func openPage(_ row: PagePickerRow) {
         let previous = openPageId
+        // Der ⌘Z/⌘⇧Z-Hinweis gehört zur bisherigen Seite: ihre Historie endet mit
+        // dem Wechsel (setPage), ⌘⇧Z täte auf der neuen Seite nichts.
+        if previous != row.id { dismissHistoryNotice() }
         openPageId = row.id   // sofortige Toolbar-Anzeige; editorState bestätigt später
         openPageDirty = false // frisch geöffnete Seite ist sauber
         Task {
@@ -365,6 +377,15 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    /// Die Seite wurde am Server gelöscht: späte Saves dafür verwerfen und sie,
+    /// falls offen, im Editor schliessen. VOR dem lokalen Löschen aufrufen —
+    /// der Close-Handler des Editors sichert noch einmal, und dieser Save käme
+    /// sonst erst nach dem Löschen an und legte die Seite wieder an.
+    func forgetDeletedPage(id: Int) {
+        bridge.markPageDeleted(String(id))
+        if openPageId == id { closePage() }
+    }
+
     /// Schliesst die offene Seite (Toolbar-Aktion „Seite schliessen"). Die WebView
     /// sichert lokal (local-first), leert die Schreibfläche und zeigt die ruhige
     /// Leerfläche; danach öffnen wir den Picker, damit der Nutzer direkt die
@@ -372,6 +393,7 @@ final class LibraryStore: ObservableObject {
     /// Leeren gespeichert.
     func closePage() {
         guard openPageId != nil else { return }
+        dismissHistoryNotice()    // der Hinweis gehört zur geschlossenen Seite
         openPageId = nil          // Toolbar sofort leeren
         Task {
             await bridge.closePage()

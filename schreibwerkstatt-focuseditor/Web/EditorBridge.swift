@@ -84,6 +84,15 @@ final class EditorBridge: NSObject, WKScriptMessageHandlerWithReply, EditorCoord
     /// JS-Fn erneut anstösst, sobald sie einmal angeboten wurde. Sitzungs-lokal;
     /// `resetSpellcheckDeferred()` gibt ihn für einen Serverwechsel frei.
     var spellcheckDeferredDone = false
+    /// Seiten, die in dieser Sitzung am Server gelöscht wurden. Ein Save dafür
+    /// (etwa der Sicherungs-Save des Close-Handlers, der erst NACH dem lokalen
+    /// Löschen ankommt) würde die Seite samt Outbox-Eintrag wiederbeleben — mit
+    /// einem 404 beim nächsten Push als Dauer-Konflikt. `opSave` verwirft sie.
+    private(set) var deletedPageIds: Set<String> = []
+
+    func markPageDeleted(_ pageId: String) {
+        deletedPageIds.insert(pageId)
+    }
 
     /// Lokal gewählte Fokus-Granularität (CSS-Klasse `focus-mode--<value>`).
     /// Vom `FocusController` gesetzt; Default aus UserDefaults, damit der
@@ -132,8 +141,11 @@ final class EditorBridge: NSObject, WKScriptMessageHandlerWithReply, EditorCoord
     /// treibt die Stats-Anzeige, das Schreibziel und den Tages-Delta. Die pageId
     /// erlaubt dem Store, „heute geschrieben" PRO Seite zu führen. Gesetzt vom
     /// `WritingStatsStore`.
-    var onStats: ((String?, Int, Int) -> Void)?
-    /// Nutzer-Tippaktivität (jede `reportStats`-Meldung der WebView). Vom `onStats`
+    /// `(pageId, words, chars, typed)` — `typed == false` für Zählungen ohne
+    /// Eingabe (Seitenwechsel, stiller Server-Refresh): die gehen in die
+    /// Live-Anzeige, aber nicht in „heute geschrieben".
+    var onStats: ((String?, Int, Int, Bool) -> Void)?
+    /// Nutzer-Tippaktivität (`reportStats`-Meldungen aus echter Eingabe). Vom `onStats`
     /// bewusst GETRENNT, damit der `WritingStatsStore` seinen `onStats`-Slot behält.
     /// Treibt die Idle-Erkennung im `WritingTimeTracker` (Schreibzeit pausiert bei
     /// längerer Tipp-Pause). Gesetzt von `AppCore`.

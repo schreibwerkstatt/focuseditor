@@ -18,6 +18,36 @@ Zwei Regeln, damit der Text stimmt:
 Die Erstversion braucht keinen Text — Apple zeigt „Neue Funktionen“ erst ab dem
 ersten Update und lässt das Feld dort leer.
 
+## 3.25 · Deutsch (max. 4000)
+
+```
+• „Buch exportieren …“ erzeugt die Markdown-Datei jetzt mit demselben Export wie die Web-App — gleiche Formatierung, egal wo du exportierst
+• Vor dem Export werden deine letzten Änderungen gesichert und hochgeladen; Abschnitte, die noch nicht synchronisiert werden konnten, nennt der Hinweis nach dem Export ausdrücklich. Der Export braucht dafür eine Verbindung zum Server — ohne Netz erscheint eine klare Meldung, bevor du einen Speicherort wählst
+• Zuverlässigerer Abgleich: Änderungen von einem anderen Gerät überschreiben nichts mehr, was du gerade tippst, sondern werden mit deinem Stand zusammengeführt
+• Beim Abmelden und beim schnellen Wechsel zwischen Abschnitten gehen keine eben getippten Zeichen mehr verloren
+• „Frühere Fassungen …“ (⌘⇧R): eine wiederhergestellte Fassung bleibt verlässlich stehen, auch wenn noch Änderungen offen waren — dein bisheriger Stand wird vorher selbst als Fassung gesichert
+• „Heute geschrieben“ zählt nur noch, was du selbst tippst — Änderungen von anderen Geräten fliessen nicht mehr ein
+• Lässt sich ein Abschnitt wegen eines Serverfehlers nicht synchronisieren, sagt die App das jetzt und versucht es erneut
+• Lektorat: Abbrechen funktioniert zuverlässig, auch direkt nach dem Start
+• Kleinere Korrekturen: ⏎ im Dialog „Neuer Abschnitt …“ öffnet nicht mehr versehentlich einen Abschnitt im Picker; nach dem Wiederöffnen des Schreibfensters (⌘0) ist die Werkzeugleiste wieder da
+```
+
+## 3.25 · English (max 4000)
+
+```
+• “Export Book …” now creates the Markdown file with the same export as the web app — identical formatting wherever you export
+• Before exporting, your latest changes are saved and uploaded; sections that could not be synced yet are named explicitly in the notice after the export. Exporting therefore needs a connection to the server — without one you get a clear message before choosing where to save
+• More reliable sync: changes from another device no longer overwrite what you are typing; they are merged with your version instead
+• Signing out or switching quickly between sections no longer loses the characters you just typed
+• “Earlier Versions …” (⌘⇧R): a restored version now reliably stays in place, even if changes were still pending — your previous text is saved as a version first
+• “Written today” only counts what you type yourself — changes from other devices no longer add to it
+• If a section cannot be synced because of a server error, the app now tells you and tries again
+• Editorial review: cancelling works reliably, even right after starting
+• Smaller fixes: ⏎ in the “New Section …” dialog no longer opens a section in the picker by accident; the toolbar is back after reopening the writing window (⌘0)
+```
+
+> **3.24 (46)** wurde hochgeladen, aber nie eingereicht — ihr Inhalt steht oben in 3.25.
+
 ## 3.24 · Deutsch (max. 4000)
 
 ```

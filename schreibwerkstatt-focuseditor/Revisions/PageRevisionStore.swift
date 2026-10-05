@@ -90,10 +90,17 @@ final class PageRevisionStore: ObservableObject {
     @Published private(set) var isRestoring = false
 
     private let api: APIClient
+    /// Vorlauf vor dem Wiederherstellen: offenen Draft sichern + pushen (in
+    /// `AppCore` auf `bridge.flushDraftSave()` + `sync.syncNow(manual:)`
+    /// verdrahtet). Damit liegt der Stand, den die Wiederherstellung ersetzt,
+    /// selbst als Revision am Server — und keine ungepushte lokale Änderung
+    /// kann die Wiederherstellung danach per Merge wieder zurückdrehen.
+    private let prepare: () async -> Void
     private let log = AppLog.revisions
 
-    init(api: APIClient) {
+    init(api: APIClient, prepare: @escaping () async -> Void = {}) {
         self.api = api
+        self.prepare = prepare
     }
 
     // MARK: - Liste
@@ -157,6 +164,7 @@ final class PageRevisionStore: ObservableObject {
         guard let pageId, !isRestoring else { return false }
         isRestoring = true
         defer { isRestoring = false }
+        await prepare()
         do {
             try await api.sendVoid("/content/pages/\(pageId)/revisions/\(revisionId)/restore",
                                    method: .POST)

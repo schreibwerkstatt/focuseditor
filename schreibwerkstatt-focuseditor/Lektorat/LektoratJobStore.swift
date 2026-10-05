@@ -86,6 +86,8 @@ final class LektoratJobStore: ObservableObject {
     /// SyncEngine kennt (und in Tests ohne beides läuft).
     private let prepare: () async -> Void
     private var runTask: Task<Void, Never>?
+    /// Zählt bei jedem Start, Abbruch und Reset hoch (s. `run`).
+    private var runGeneration = 0
     /// Job-ID des laufenden Server-Jobs (für „Abbrechen" via `DELETE /jobs/:id`).
     private var activeJobId: String?
     private let log = AppLog.lektorat
@@ -111,9 +113,11 @@ final class LektoratJobStore: ObservableObject {
         self.bookId = bookId
         self.pageName = pageName
         phase = .preparing
+        runGeneration += 1
+        let generation = runGeneration
         runTask = Task { [weak self] in
-            await self?.run(pageId: pageId, bookId: bookId, pageName: pageName)
-            self?.runTask = nil
+            await self?.run(pageId: pageId, bookId: bookId, pageName: pageName, generation: generation)
+            if self?.runGeneration == generation { self?.runTask = nil }
         }
     }
 
@@ -121,6 +125,7 @@ final class LektoratJobStore: ObservableObject {
     /// stornieren (`DELETE /jobs/:id`, best-effort — ein bereits fertiger Job
     /// antwortet mit 400 und darf still scheitern).
     func cancel() {
+        runGeneration += 1   // der alte Lauf darf ab jetzt nichts mehr schreiben
         runTask?.cancel()
         runTask = nil
         if let jobId = activeJobId, let api {
@@ -143,6 +148,7 @@ final class LektoratJobStore: ObservableObject {
     /// Server-Wechsel/Abmelden: transienten Zustand verwerfen (die Job-ID und
     /// der Deep-Link gelten nur am alten Server).
     func reset() {
+        runGeneration += 1
         runTask?.cancel()
         runTask = nil
         activeJobId = nil
@@ -154,7 +160,16 @@ final class LektoratJobStore: ObservableObject {
 
     // MARK: - Ablauf
 
-    private func run(pageId: Int, bookId: Int?, pageName: String?) async {
+    /// `generation`: Abbrechen/Zurücksetzen zählt `runGeneration` hoch, kehrt aber
+    /// sofort zurück, während dieser Task noch in `prepare()` oder im POST hängen
+    /// kann. Jeder Schreibzugriff prüft darum, ob er noch zum AKTUELLEN Lauf
+    /// gehört — sonst setzte ein abgebrochener alter Lauf die Phase eines direkt
+    /// danach neu gestarteten auf `.idle` (Knopf nicht mehr „läuft", neuer Lauf
+    /// nicht mehr abbrechbar) oder meldete nach dem Abbrechen „offline"
+    /// (`URLSession` wirft beim Abbruch `URLError.cancelled`, keinen
+    /// `CancellationError`).
+    private func run(pageId: Int, bookId: Int?, pageName: String?, generation: Int) async {
+        let isCurrent = { [weak self] in self?.runGeneration == generation }
         guard let api else {
             phase = .failed(t("lektorat.err.offline"))
             return
@@ -165,24 +180,34 @@ final class LektoratJobStore: ObservableObject {
         // darum wird ein fehlgeschlagener Push nicht verschluckt, sondern über
         // den Sync-Status sichtbar (dort gehört er hin).
         await prepare()
-        if Task.isCancelled { phase = .idle; return }
+        guard isCurrent(), !Task.isCancelled else { return }
 
         phase = .running(progress: 0)
         do {
             let req = CheckJobRequest(page_id: pageId, book_id: bookId, page_name: pageName)
             let created = try await api.send("/jobs/check", method: .POST, body: req,
                                              decode: CheckJobCreateResponse.self)
+            guard isCurrent() else {
+                // Während des POST abgebrochen, der Server hat den Job aber schon
+                // angelegt → stornieren, sonst liefe die KI-Prüfung (und ihre
+                // Kosten) ohne Abnehmer weiter.
+                if let jobId = created.jobId {
+                    let encoded = Self.encodePath(jobId)
+                    Task { try? await api.sendVoid("/jobs/\(encoded)", method: .DELETE) }
+                }
+                return
+            }
             guard let jobId = created.jobId else {
                 phase = .failed(t("lektorat.err.generic"))
                 return
             }
             activeJobId = jobId
-            try await poll(jobId: jobId, api: api)
-            activeJobId = nil
-        } catch is CancellationError {
-            activeJobId = nil
-            phase = .idle
+            try await poll(jobId: jobId, api: api, isCurrent: isCurrent)
+            if isCurrent() { activeJobId = nil }
         } catch {
+            // Abgebrochen (CancellationError ODER `URLError.cancelled` im
+            // `AuthError.network`) → `cancel()` hat die Phase bereits gesetzt.
+            guard isCurrent(), !Task.isCancelled else { return }
             activeJobId = nil
             log.error("Lektorat für Seite \(pageId, privacy: .public) fehlgeschlagen: \(error.localizedDescription, privacy: .public)")
             phase = .failed(Self.message(for: error))
@@ -193,11 +218,12 @@ final class LektoratJobStore: ObservableObject {
     /// selbst (Deckel, transiente Lesefehler, Status-Deutung) liegt in
     /// [JobPolling](../Jobs/JobPolling.swift) — dieselbe Queue bedient auch die
     /// KI-Synonyme.
-    private func poll(jobId: String, api: APIClient) async throws {
+    private func poll(jobId: String, api: APIClient, isCurrent: () -> Bool) async throws {
         let outcome = try await JobPolling.awaitCompletion(
             jobId: jobId, api: api, interval: pollInterval, maxPolls: maxPolls,
             resultType: LektoratJobResult.self,
-            onProgress: { progress in phase = .running(progress: progress) })
+            onProgress: { progress in if isCurrent() { phase = .running(progress: progress) } })
+        guard isCurrent() else { return }
 
         switch outcome {
         case .done(let result):

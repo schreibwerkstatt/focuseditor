@@ -55,7 +55,12 @@ extension WebAssets {
                   });
                   return parts.length ? parts.join('\\n') : tc;
                 }
-                function countAndReport() {
+                // `typed`: Zählung aus echter Eingabe (input-Event). Seitenwechsel,
+                // stiller Server-Refresh, Schliessen und die Erstzählung melden
+                // `false` — Swift darf sie weder als Tippaktivität (Idle-Uhr der
+                // Schreibzeit) noch als „heute geschrieben" werten; sonst zählte
+                // eine Änderung von einem anderen Gerät als eigene Arbeit.
+                function countAndReport(typed) {
                   const root = document.querySelector('.focus-editor__content');
                   // textContent.length zuerst greifen (kein Reflow) und merken,
                   // damit das Gate unten dieselbe Metrik vergleicht.
@@ -64,7 +69,7 @@ extension WebAssets {
                   const trimmed = text.trim();
                   const words = trimmed ? trimmed.split(/\\s+/).length : 0;
                   const chars = text.replace(/\\u00a0/g, ' ').length;
-                  try { fb.reportStats(words, chars, currentPageId); } catch (_) {}
+                  try { fb.reportStats(words, chars, currentPageId, typed === true); } catch (_) {}
                 }
                 window.__countStats = countAndReport;
                 // Der eigentliche Zähllauf liest innerText → erzwingt ein Layout.
@@ -79,7 +84,7 @@ extension WebAssets {
                   // Reiner Format-/Selektions-Input ohne Längenänderung → nichts zu
                   // zählen (spart den Reflow). Echtes Tippen ändert die Länge.
                   if (len === lastTcLen) return;
-                  ric(countAndReport, { timeout: 1000 });
+                  ric(function () { countAndReport(true); }, { timeout: 1000 });
                 }
                 // Debounced bei Eingabe (input bubblet vom Content nach oben).
                 document.addEventListener('input', function () {

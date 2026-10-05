@@ -82,9 +82,17 @@ extension PagePickerOverlay {
 
     /// Fängt ↑/↓/⏎ ab, solange das Overlay offen ist. Das Suchfeld behält den
     /// Fokus fürs Tippen; die Pfeiltasten steuern die Auswahl statt den Cursor.
+    ///
+    /// Ein lokaler Monitor sieht die Tasten ALLER Fenster der App. Darum nur im
+    /// Fenster des Pickers und nur ohne angehängtes Sheet eingreifen — sonst
+    /// öffnete ⏎ im Namensfeld von „Neue Seite …" (⌘N) oder im Einstellungen-
+    /// Fenster die markierte Seite, statt das Sheet bzw. Feld zu bedienen.
     func installKeyMonitor() {
         guard keyMonitor == nil else { return }
+        weak let pickerWindow = NSApp.keyWindow ?? NSApp.mainWindow
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard let window = event.window, window === pickerWindow,
+                  window.attachedSheet == nil else { return event }
             switch event.keyCode {
             case 125: moveSelection(1);  return nil   // ↓
             case 126: moveSelection(-1); return nil   // ↑

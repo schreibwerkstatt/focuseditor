@@ -353,14 +353,31 @@ final class WritingTimeTracker: ObservableObject {
         isFlushing = true
         defer { isFlushing = false }
 
+        // Server, zu dem die Buch-IDs dieses Durchlaufs gehören. Ein Server-
+        // Wechsel (`reset()`) während des Requests tauscht `slug` und `pending`
+        // aus — die Bestätigung gilt dann dem Puffer des ALTEN Servers.
+        let flushSlug = slug
+        let api = self.api
         // Über eine Schlüssel-Kopie iterieren — `pending` kann zwischen den
         // `await`s von anderen MainActor-Ticks verändert werden.
         for book in Array(pending.keys) {
             guard let secs = pending[book], secs > 0 else { continue }
             let toSend = min(secs, maxSecondsPerPing)
             do {
-                try await api.sendVoid("/history/writing-time", method: .POST,
-                                       body: WritingTimePing(bookId: book, seconds: toSend))
+                // Eigener, unstrukturierter Task: `stopHeartbeat()` bricht den
+                // Heartbeat-Task ab — auch mitten in diesem Request. Ein
+                // abgebrochener Request, den der Server schon verbucht hat,
+                // bliebe sonst im Puffer und würde doppelt gesendet; der
+                // abschliessende Ping vor einer Idle-Pause scheiterte immer.
+                try await Task {
+                    try await api.sendVoid("/history/writing-time", method: .POST,
+                                           body: WritingTimePing(bookId: book, seconds: toSend))
+                }.value
+                guard slug == flushSlug else {
+                    Self.subtractPersisted(slug: flushSlug, book: book, seconds: toSend,
+                                           defaults: defaults)
+                    return
+                }
                 let rest = (pending[book] ?? 0) - toSend
                 pending[book] = rest > 0 ? rest : nil
             } catch {
@@ -388,6 +405,18 @@ final class WritingTimeTracker: ObservableObject {
             let encoded = Dictionary(uniqueKeysWithValues: pending.map { (String($0.key), $0.value) })
             defaults.set(encoded, forKey: key)
         }
+    }
+
+    /// Zieht bestätigte Sekunden vom persistierten Puffer eines (inzwischen
+    /// nicht mehr aktiven) Servers ab — sonst sendete ein Rückwechsel sie erneut.
+    private static func subtractPersisted(slug: String, book: Int, seconds: Int,
+                                          defaults: UserDefaults) {
+        let key = pendingKeyPrefix + slug
+        guard var raw = defaults.dictionary(forKey: key) as? [String: Int],
+              let current = raw[String(book)] else { return }
+        let rest = current - seconds
+        raw[String(book)] = rest > 0 ? rest : nil
+        if raw.isEmpty { defaults.removeObject(forKey: key) } else { defaults.set(raw, forKey: key) }
     }
 
     /// Liest den persistierten Puffer eines Servers zurück (defensiv: nur positive

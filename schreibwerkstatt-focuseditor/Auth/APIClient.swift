@@ -17,8 +17,11 @@ import Foundation
 final class APIClient {
     /// Liefert das aktuelle Klartext-Token (oder nil), z. B. aus der Keychain.
     private let tokenProvider: () -> String?
-    /// Wird bei 401 aufgerufen (z. B. um die Session zu beenden).
-    var onUnauthorized: (() -> Void)?
+    /// Wird bei 401 aufgerufen (z. B. um die Session zu beenden) — mit dem
+    /// Token, das der abgewiesene Request trug (`nil` = ohne Token). So kann der
+    /// Empfänger ein verspätetes 401 eines ALTEN Tokens ignorieren, statt das
+    /// inzwischen frisch gespeicherte neue zu löschen.
+    var onUnauthorized: ((_ usedToken: String?) -> Void)?
 
     private let session: URLSession
     private let decoder = JSONDecoder()
@@ -125,7 +128,7 @@ final class APIClient {
 
         switch http.statusCode {
         case 401:
-            onUnauthorized?()
+            onUnauthorized?(Self.bearerToken(of: request))
             throw AuthError.unauthorized
         case 500...599:
             throw serverError(http, data)
@@ -159,7 +162,7 @@ final class APIClient {
         case 200...299:
             return RawResponse(notModified: false, data: data, etag: responseETag)
         case 401:
-            onUnauthorized?()
+            onUnauthorized?(Self.bearerToken(of: request))
             throw AuthError.unauthorized
         default:
             throw serverError(http, data)
@@ -180,7 +183,7 @@ final class APIClient {
         case 200...299:
             return data
         case 401:
-            onUnauthorized?()
+            onUnauthorized?(Self.bearerToken(of: request))
             throw AuthError.unauthorized
         default:
             throw serverError(http, data)
@@ -201,10 +204,13 @@ final class APIClient {
         acceptJSON: Bool = true,
         ifNoneMatch: String? = nil
     ) throws -> URLRequest {
-        guard let baseURL = ServerConfig.baseURL,
-              let url = URL(string: path, relativeTo: baseURL) else {
-            throw AuthError.invalidServerURL
-        }
+        // Pfad an die Basis ANHÄNGEN statt relativ aufzulösen: `URL(string:
+        // "/content/…", relativeTo:)` ersetzt einen Pfad der Basis (Server unter
+        // `https://host/sw`) durch den Wurzelpfad. Die Basis ist normalisiert
+        // (ohne Slash am Ende), der Pfad beginnt mit `/`.
+        guard let baseURL = ServerConfig.baseURL else { throw AuthError.invalidServerURL }
+        let joined = baseURL.absoluteString + (path.hasPrefix("/") ? path : "/" + path)
+        guard let url = URL(string: joined) else { throw AuthError.invalidServerURL }
 
         var request = URLRequest(url: url)
         request.httpMethod = method.rawValue
@@ -228,6 +234,13 @@ final class APIClient {
             request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
         }
         return request
+    }
+
+    /// Das Bearer-Token, das ein Request trägt (`nil` ohne Authorization-Header).
+    private static func bearerToken(of request: URLRequest) -> String? {
+        guard let header = request.value(forHTTPHeaderField: "Authorization"),
+              header.hasPrefix("Bearer ") else { return nil }
+        return String(header.dropFirst("Bearer ".count))
     }
 
     /// Führt den Request aus und liefert `HTTPURLResponse` + Body. Mappt

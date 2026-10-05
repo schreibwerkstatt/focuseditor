@@ -127,6 +127,16 @@ final class EditorBundleStore: ObservableObject {
     /// NUR die Editor-Assets — KEINE Inhalte (die liegen im SQLite-Spiegel und
     /// werden nicht angetastet). Nach dem Leeren erfolgt ein frischer Download.
     func clearEditorCache() async {
+        // Erst einen laufenden (Start-)Refresh auslaufen lassen. Sonst liefe er
+        // mit dem ETag des eben gelöschten Caches weiter: ein 304 endete in
+        // „304, aber kein lokaler Cache", und der frische Download unten käme
+        // am `isRefreshing`-Guard gar nicht erst an (Ladebildschirm hängt).
+        // Gedeckelt — der Request selbst hat ein endliches Timeout.
+        var waited = 0
+        while isRefreshing && waited < 600 {    // max. ~60 s
+            try? await Task.sleep(for: .milliseconds(100))
+            waited += 1
+        }
         try? fileManager.removeItem(at: cacheDir)
         try? fileManager.removeItem(at: metaURL)
         // Auch ein evtl. vorbereitetes (noch nicht aktiviertes) Bundle verwerfen,

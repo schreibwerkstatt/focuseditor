@@ -26,7 +26,8 @@ Altersfreigabe 4+, Inhalte Dritter deklariert (`USES_THIRD_PARTY_CONTENT`).
 | 3.21 | 43 | `READY_FOR_SALE` |
 | 3.22 | 44 | `READY_FOR_SALE` |
 | **3.23** | 45 | `READY_FOR_SALE` — zuletzt veröffentlicht |
-| **3.24** | 46 (hochgeladen 2026-10-04) | Version im Browser anzulegen, Build zuzuordnen, „Neue Funktionen“ aus [whats-new.md](whats-new.md) |
+| 3.24 | 46 (hochgeladen 2026-10-04) | nie eingereicht — von 3.25 abgelöst |
+| **3.25** | 47 (hochgeladen 2026-10-05) | Version im Browser anzulegen, Build zuzuordnen, „Neue Funktionen“ aus [whats-new.md](whats-new.md) |
 
 Mit dem vorhandenen API-Schlüssel (Rolle *Developer*) **lesbar**: Versionen,
 Builds, Localizations, Kategorien, Altersfreigabe — daher die Tabellen oben.
