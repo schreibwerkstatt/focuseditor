@@ -472,10 +472,12 @@
   "revisions.error.notFound": "That version no longer exists.",
   "revisions.error.offline": "Earlier versions live on the server — this needs a connection.",
   "revisions.footerHint": "Restoring creates a version of its own — nothing is lost.",
+  "revisions.pinned": "Pinned",
   "revisions.previewEmpty": "This version is empty.",
   "revisions.previewFailed": "The preview could not be loaded.",
   "revisions.restore": "Restore",
   "revisions.selectHint": "Select a version to view it.",
+  "revisions.source.restore": "Restored",
   "revisions.title": "Earlier versions",
 
   "settings.account.copyDiagnostics": "Copy diagnostics",

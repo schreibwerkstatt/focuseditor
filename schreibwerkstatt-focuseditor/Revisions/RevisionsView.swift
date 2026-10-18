@@ -183,9 +183,17 @@ private struct RevisionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(timeLabel)
-                .font(.callout)
-                .foregroundStyle(isSelected ? Color.white : Color.primary)
+            HStack(spacing: 4) {
+                if revision.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.caption2)
+                        .accessibilityLabel(t("revisions.pinned"))
+                }
+                Text(revision.pinnedTitle ?? timeLabel)
+                    .font(.callout)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
             Text(detailLabel)
                 .font(.caption)
                 .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
@@ -209,9 +217,12 @@ private struct RevisionRow: View {
     /// Ansicht gebaut ist.
     private var detailLabel: String {
         var parts: [String] = []
+        // Benannte Revision: der Titel ist das Label, das Datum wandert hierher.
+        if revision.pinnedTitle != nil { parts.append(timeLabel) }
+        if revision.source == "restore" { parts.append(t("revisions.source.restore")) }
         if let chars = revision.chars { parts.append(NumberText.plural(chars, "picker.chars")) }
         if let client = revision.client, !client.isEmpty { parts.append(client) }
-        else if let source = revision.source, !source.isEmpty { parts.append(source) }
+        else if let source = revision.source, !source.isEmpty, source != "restore" { parts.append(source) }
         return parts.isEmpty ? "—" : parts.joined(separator: " · ")
     }
 }

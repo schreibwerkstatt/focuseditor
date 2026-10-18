@@ -472,10 +472,12 @@
   "revisions.error.notFound": "Die Fassung gibt es nicht mehr.",
   "revisions.error.offline": "Frühere Fassungen liegen am Server — dafür braucht es eine Verbindung.",
   "revisions.footerHint": "Wiederherstellen legt selbst eine Fassung an — nichts geht verloren.",
+  "revisions.pinned": "Angeheftet",
   "revisions.previewEmpty": "Diese Fassung ist leer.",
   "revisions.previewFailed": "Die Vorschau konnte nicht geladen werden.",
   "revisions.restore": "Wiederherstellen",
   "revisions.selectHint": "Eine Fassung wählen, um sie anzusehen.",
+  "revisions.source.restore": "Wiederhergestellt",
   "revisions.title": "Frühere Fassungen",
 
   "settings.account.copyDiagnostics": "Diagnose kopieren",

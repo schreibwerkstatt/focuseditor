@@ -47,6 +47,19 @@ struct PageRevision: Identifiable, Decodable, Equatable {
     let client: String?
     let created_at: String?
     let summary: String?
+    /// Angeheftet (0/1, ab Vertrag api 2): die Retention löscht sie nie.
+    let pinned: Int?
+    /// Name einer angehefteten Revision (ab api 2), sonst null.
+    let label: String?
+
+    var isPinned: Bool { (pinned ?? 0) != 0 }
+
+    /// Titel einer angehefteten, benannten Revision — sonst nil (dann Datum).
+    var pinnedTitle: String? {
+        guard isPinned, let label else { return nil }
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     var createdAt: Date? {
         guard let created_at else { return nil }
