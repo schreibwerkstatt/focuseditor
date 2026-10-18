@@ -23,29 +23,17 @@ extension WebAssets {
     /// Fokus-Granularität + Typografie — Fragment des Boot-Moduls (s. Kopfdoku).
     static let glueTypographyJS = """
               // ── Fokus-Granularität live umschalten (Swift → JS) ─────────────
-              // Bevorzugt den öffentlichen Standalone-Hook `setGranularity` (ab
-              // dem Bundle, das ihn mitliefert) — er kapselt Klassentausch +
-              // Overlay-Recompute in der Engine. Fallback (älteres gecachtes
-              // Bundle ohne den Hook): das Verhalten lokal nachbilden, inkl. des
-              // internen `_focusUpdateActive`-Aufrufs. Greift erst, bis der OTA-
-              // Refresh den Hook nachzieht.
+              // Nur über den öffentlichen Handle-Hook `setGranularity` (Vertrag
+              // contract/editor-api.d.ts) — er kapselt Klassentausch + Overlay-
+              // Neuberechnung in der Engine. Kein Nachbau über Interna
+              // (`controller._*`, `host.*`): die darf der Server ohne Ankündigung
+              // ändern. Ist der Editor noch nicht gemountet, gibt es nichts
+              // umzuschalten — der Mount liest die Stufe selbst (`bridge.granularity`).
               function applyGranularity(g) {
                 const handle = window.__standalone;
                 if (handle && typeof handle.setGranularity === 'function') {
                   handle.setGranularity(g);
-                  return;
                 }
-                const valid = ['paragraph', 'sentence', 'window-3', 'typewriter-only'];
-                const gran = valid.indexOf(g) >= 0 ? g : 'paragraph';
-                if (handle && handle.host) handle.host.focusGranularity = gran;
-                const focusEl = document.querySelector('.focus-editor');
-                if (focusEl) {
-                  focusEl.classList.remove(
-                    'focus-mode--paragraph', 'focus-mode--sentence',
-                    'focus-mode--window-3', 'focus-mode--typewriter-only');
-                  focusEl.classList.add('focus-mode--' + gran);
-                }
-                try { handle && handle.controller && handle.controller._focusUpdateActive(false); } catch (_) {}
               }
               fb.on('focusGranularity', (p) => {
                 if (p && p.granularity) applyGranularity(p.granularity);
