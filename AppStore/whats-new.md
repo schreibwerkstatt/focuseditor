@@ -19,6 +19,22 @@ Zwei Regeln, damit der Text stimmt:
 Die Erstversion braucht keinen Text — Apple zeigt „Neue Funktionen“ erst ab dem
 ersten Update und lässt das Feld dort leer.
 
+## 3.27 · Deutsch (max. 4000)
+
+```
+• Schlechte Verbindung im Zug oder im Funkloch, Laptop mitten im Hochladen zugeklappt: Kommt die Bestätigung des Servers nicht an, meldet die App beim nächsten Abgleich keinen Konflikt mehr mit deinem eigenen Text — sie erkennt ihren eigenen Stand und schreibt einfach weiter
+• Änderungen von einem anderen Gerät werden dabei weiterhin sicher erkannt und nie still überschrieben
+• Konflikt auflösen: „mein Stand“ oder „Server-Stand“ gilt jetzt nur noch für die Absätze, die auf beiden Geräten geändert wurden — alle übrigen Änderungen beider Seiten bleiben erhalten, statt verworfen zu werden. Das Konflikt-Fenster sagt das jetzt auch ausdrücklich
+```
+
+## 3.27 · English (max 4000)
+
+```
+• Patchy connection on the train, laptop closed mid-upload: if the server's confirmation never arrives, the app no longer reports a conflict with your own text on the next sync — it recognises its own version and simply carries on
+• Changes from another device are still reliably detected and never silently overwritten
+• Resolving a conflict: choosing “mine” or “server” now only applies to paragraphs changed on both devices — all other changes from either side are kept instead of being discarded. The conflict window now says so explicitly
+```
+
 ## 3.26 · Deutsch (max. 4000)
 
 ```
