@@ -91,6 +91,11 @@ struct PushResponse: Decodable {
     /// Nur in der PUT-Antwort: `"replay"` (Wiederholung, nichts geschrieben) oder
     /// `"own"` (veralteter Stempel, aber die letzte Kennung war unsere).
     var save_match: String?
+    /// Nur in der PUT-Antwort auf einen Push MIT `base_html`: der Server hat
+    /// blockweise gemergt, `html` ist der neue Stand. Der Mac schickt
+    /// `base_html` nicht (er mergt selbst per `merge3`) — das Feld ist nur
+    /// bekannt, damit der Vertrag vollständig dekodiert.
+    var merged: Bool?
 }
 
 /// 409-Body `PAGE_CONFLICT`.
@@ -99,6 +104,9 @@ struct ConflictBody: Decodable {
     let server_updated_at: String?
     let server_editor_email: String?
     let server_editor_name: String?
+    /// Nur bei einem Push MIT `base_html`: `data-bid` der kollidierenden Blöcke.
+    /// Der Mac schickt `base_html` nicht; bekannt nur für den Vertrag.
+    var merge_conflicts: [String]?
 }
 
 /// 423-Body `PAGE_LOCKED`.

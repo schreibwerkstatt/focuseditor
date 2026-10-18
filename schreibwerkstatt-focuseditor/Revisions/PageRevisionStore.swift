@@ -54,16 +54,16 @@ struct PageRevision: Identifiable, Decodable, Equatable {
     }
 }
 
-private struct RevisionListResponse: Decodable {
+struct RevisionListResponse: Decodable {
     let revisions: [PageRevision]
 }
 
-private struct RevisionDetail: Decodable {
+struct RevisionDetail: Decodable {
     let id: Int
     let body_html: String?
 }
 
-private struct RevisionDetailResponse: Decodable {
+struct RevisionDetailResponse: Decodable {
     let revision: RevisionDetail
 }
 

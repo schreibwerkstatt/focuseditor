@@ -283,8 +283,16 @@ extension EditorBridge {
 
 // MARK: - Spellcheck-DTOs
 
-/// Antwort-Ausschnitt von `GET /config` — nur der LanguageTool-Block.
-private struct ConfigDTO: Decodable {
+/// Antwort-Ausschnitt von `GET /config`: LanguageTool, Pro-User-Einstellungen
+/// und der Vertragsstand. `internal`, damit `ContractFixtureTests` genau diesen
+/// Typ gegen die Server-Fixture dekodiert.
+struct ConfigDTO: Decodable {
+    /// `clientContract` (contract/version.json): Feature-Erkennung per
+    /// `api >= n`. Fehlt bei Servern vor dem Vertrag.
+    struct ClientContract: Decodable {
+        let api: Int
+        let editorApi: Int
+    }
     struct LanguageTool: Decodable {
         let enabled: Bool?
         let debounceMs: Int?
@@ -293,6 +301,7 @@ private struct ConfigDTO: Decodable {
         let focus_granularity: String?
         let locale: String?
     }
+    let clientContract: ClientContract?
     let languagetool: LanguageTool?
     /// Pro-User-Einstellungen (nur mit aufgelöstem User, also auch per
     /// Device-Token — der Guard setzt `req.session.user`). `nil` ohne User.
@@ -302,7 +311,7 @@ private struct ConfigDTO: Decodable {
 /// Antwort-Ausschnitt von `GET /booksettings/:id` — nur Sprache/Region für den
 /// Anführungszeichen-Stil (`resolveQuoteStyle`). Weitere Felder (buchtyp,
 /// buch_kontext …) werden ignoriert.
-private struct BookSettingsDTO: Decodable {
+struct BookSettingsDTO: Decodable {
     let language: String?
     let region: String?
 }
@@ -328,7 +337,7 @@ private struct DictionaryAddRequest: Encodable {
 // MARK: - Synonyme-DTOs
 
 /// Ein einzelner Synonym-Vorschlag (geteilt von OpenThesaurus + KI-Job).
-private nonisolated struct SynonymEntry: Decodable, Sendable {
+nonisolated struct SynonymEntry: Decodable, Sendable {
     let wort: String
     let hinweis: String?
 }
@@ -351,14 +360,14 @@ private struct SynonymJobRequest: Encodable {
 }
 
 /// Antwort von `POST /jobs/synonym` — die Job-ID (oder ein Fehler).
-private struct JobCreateResponse: Decodable {
+struct JobCreateResponse: Decodable {
     let jobId: String?
     let error: String?
 }
 
 /// `result`-Teil von `GET /jobs/:id` für den KI-Synonym-Job. Den Rahmen
 /// (status/progress/error) liefert `JobStatusEnvelope`.
-private nonisolated struct SynonymJobResult: Decodable, Sendable {
+nonisolated struct SynonymJobResult: Decodable, Sendable {
     let synonyme: [SynonymEntry]?
 }
 

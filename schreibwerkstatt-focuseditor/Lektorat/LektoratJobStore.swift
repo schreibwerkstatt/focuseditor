@@ -279,7 +279,7 @@ private struct CheckJobRequest: Encodable {
 
 /// Antwort von `POST /jobs/check` — die Job-ID (`existing: true`, falls schon
 /// ein Lauf für die Seite offen war; wird gleich behandelt: wir pollen ihn).
-private struct CheckJobCreateResponse: Decodable {
+struct CheckJobCreateResponse: Decodable {
     let jobId: String?
     let existing: Bool?
 }
@@ -289,7 +289,7 @@ private struct CheckJobCreateResponse: Decodable {
 /// bleiben serverseitig (gelesen wird sie in der Web-App).
 /// `result`-Teil von `GET /jobs/:id` für den Lektorats-Job. Den Rahmen (status/
 /// progress/error) liefert `JobStatusEnvelope`.
-private nonisolated struct LektoratJobResult: Decodable, Sendable {
+nonisolated struct LektoratJobResult: Decodable, Sendable {
     struct Finding: Decodable, Sendable {}
     let fehler: [Finding]?
 }
