@@ -1,0 +1,12 @@
+{
+  "operation": "GET /content/macclient-i18n.json",
+  "request": {
+    "method": "GET",
+    "path": "/content/macclient-i18n.json"
+  },
+  "status": 200,
+  "response": {
+    "de": {},
+    "en": {}
+  }
+}
