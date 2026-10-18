@@ -14,24 +14,19 @@ Code-Teil (zweites Target, Signierung, `.pkg`-Export) steht in
 | [../REVIEW-NOTES.md](../REVIEW-NOTES.md) | App-Prüfungsinformationen (Demo-Zugang, 2.5.2) |
 | [screenshots/de/](screenshots/de/) · [screenshots/en/](screenshots/en/) | Screenshots, je 4 Stück, 2880×1800 |
 
-## Stand in App Store Connect (per API geprüft, 2026-10-04)
+## Stand in App Store Connect
 
-**Die App ist im Mac App Store veröffentlicht.** App-ID `6797073919`, SKU
-`SWK-FOCUSEDITOR-MAC`, Primärsprache de-DE, Kategorien Produktivität + Bücher,
-Altersfreigabe 4+, Inhalte Dritter deklariert (`USES_THIRD_PARTY_CONTENT`).
+App-ID `6797073919`, SKU `SWK-FOCUSEDITOR-MAC`, Primärsprache de-DE, Kategorien
+Produktivität + Bücher, Altersfreigabe 4+, Inhalte Dritter deklariert
+(`USES_THIRD_PARTY_CONTENT`). Welche Versionen veröffentlicht sind, welcher
+Build dranhängt und welche Version zuletzt live ging, liefert die API direkt:
 
-| Version | Build | Zustand |
-|---|---|---|
-| 3.20 | 42 | `READY_FOR_SALE` — die Erstveröffentlichung, nach drei Review-Runden |
-| 3.21 | 43 | `READY_FOR_SALE` |
-| 3.22 | 44 | `READY_FOR_SALE` |
-| 3.23 | 45 | `READY_FOR_SALE` |
-| 3.24 | 46 | `READY_FOR_SALE` |
-| **3.25** | 47 | `READY_FOR_SALE` — zuletzt veröffentlicht (Stand per API geprüft 2026-10-18) |
-| **3.26** | 48 (hochgeladen 2026-10-18) | Version im Browser anzulegen, Build zuzuordnen, „Neue Funktionen“ aus [whats-new.md](whats-new.md) |
+```bash
+scripts/appstore-status.sh
+```
 
 Mit dem vorhandenen API-Schlüssel (Rolle *Developer*) **lesbar**: Versionen,
-Builds, Localizations, Kategorien, Altersfreigabe — daher die Tabellen oben.
+Builds, Localizations, Kategorien, Altersfreigabe.
 **Nicht** lesbar/schreibbar: App-Datenschutz-Fragebogen (404), Preis und
 Verfügbarkeit (403), Release-Notes und Antworten ans Review-Team (403 beim
 Schreiben). Das läuft alles über den Browser.

@@ -11,7 +11,8 @@ Zwei Regeln, damit der Text stimmt:
   Versions-Bump. Zwischen-Bumps (z. B. 3.19) landen im Build der nächsten
   eingereichten Version und sind damit schon draussen — sie gehören **nicht**
   noch einmal in die Notes. Grundlage ist also
-  `git log v<letzte-Store-Version>..HEAD` bzw. der Diff der Builds.
+  `git log v<letzte-Store-Version>..HEAD` bzw. der Diff der Builds. Welche
+  Version zuletzt veröffentlicht ist, sagt `scripts/appstore-status.sh`.
 - **Nutzersicht, keine Technik.** Migrationen, Refactorings, Guards und
   Test-Änderungen kommen nicht vor. Wer das lesen will, liest die Commits.
 
@@ -117,12 +118,6 @@ Undo (⌘Z) now works in small steps — sentence by sentence instead of everyth
 • Quitting with ⌘Q saves the sentence you just typed
 • Settings ▸ Account: “Copy diagnostics” puts a status report for support requests on the clipboard — no token, no text from your manuscript
 ```
-
-## 3.21 — nie eingereicht (Inhalt steckt in 3.22)
-
-Build 43 wurde hochgeladen, die Version aber nie zur Review gegeben. Die
-Zählwerte im Seiten-Picker sind darum Teil der 3.22-Notes oben; die Texte hier
-bleiben nur als Archiv stehen.
 
 ## 3.21 · Deutsch (max. 4000)
 
