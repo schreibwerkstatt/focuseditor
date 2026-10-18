@@ -45,9 +45,11 @@ final class EditorBundleStoreTests: XCTestCase {
     /// Ein plausibles Bundle: Manifest + je eine JS-/CSS-Datei. KEIN
     /// `index.html` — das erzeugt der Client selbst aus dem Manifest.
     private func bundleZip(commit: String = "abc123",
-                           css: [String] = ["css/focus.css"]) -> Data {
+                           css: [String] = ["css/focus.css"],
+                           editorApi: Int? = nil) -> Data {
+        let apiField = editorApi.map { "\"editorApi\":\($0)," } ?? ""
         let manifest = """
-            {"sourceCommit":"\(commit)","jsFiles":["js/editor/focus.js"],\
+            {"sourceCommit":"\(commit)",\(apiField)"jsFiles":["js/editor/focus.js"],\
             "cssFiles":[\(css.map { "\"\($0)\"" }.joined(separator: ","))]}
             """
         var specs: [ZipFixture.FileSpec] = [
@@ -62,9 +64,11 @@ final class EditorBundleStoreTests: XCTestCase {
 
     /// Store gegen einen skriptbaren Server. `responses` wird der Reihe nach
     /// abgearbeitet (der letzte Eintrag wiederholt sich); `nil` = Transportfehler.
-    private func makeStore(_ responses: [(status: Int, data: Data, etag: String?)?]) -> EditorBundleStore {
+    private func makeStore(_ responses: [(status: Int, data: Data, etag: String?)?],
+                           onRequest: @escaping (URLRequest) -> Void = { _ in }) -> EditorBundleStore {
         var index = 0
         MockURLProtocol.handler = { request in
+            onRequest(request)
             let entry = responses.isEmpty ? nil : responses[min(index, responses.count - 1)]
             index += 1
             guard let entry else { throw URLError(.notConnectedToInternet) }
@@ -283,5 +287,102 @@ final class EditorBundleStoreTests: XCTestCase {
         }
         XCTAssertFalse(exists(tempDir.appendingPathComponent("ausbruch.txt")))
         XCTAssertFalse(store.hasCache)
+    }
+
+    // MARK: - Bundle-Vertrag (X-Editor-Api)
+
+    /// Body der 409-Absage, wie der Server ihn schickt (contract/fixtures/
+    /// editor-bundle-unsupported.json).
+    private var unsupportedBody: Data {
+        Data(#"{"error_code":"EDITOR_API_UNSUPPORTED","params":{"client":[1],"server":2}}"#.utf8)
+    }
+
+    /// Jeder Bundle-Request meldet die Majors, die die Schale kann — aus der
+    /// EINEN Konstante, nicht als zweites Literal.
+    func testBundleRequestSendsEditorApiHeader() async {
+        var seen: [String?] = []
+        let store = makeStore([(200, bundleZip(editorApi: 1), "\"e1\""), (304, Data(), "\"e1\"")],
+                              onRequest: { seen.append($0.value(forHTTPHeaderField: "X-Editor-Api")) })
+        await store.refresh(silent: false)
+        await store.refresh(silent: true)
+
+        XCTAssertEqual(seen.count, 2)
+        XCTAssertEqual(seen.first ?? nil, EditorBundleStore.editorApiHeaderValue)
+        XCTAssertEqual(seen.last ?? nil, EditorBundleStore.editorApiHeaderValue)
+        XCTAssertEqual(EditorBundleStore.editorApiHeaderValue, "1")
+        XCTAssertEqual(store.state, .ready)
+        XCTAssertFalse(store.appUpdateRequired)
+    }
+
+    /// 409 EDITOR_API_UNSUPPORTED mit Cache: das gecachte Bundle bleibt in
+    /// Betrieb (wie bei einem Netzfehler), nichts wird vorbereitet, und die App
+    /// meldet „App-Update nötig".
+    func testUnsupportedEditorApiKeepsCacheAndFlagsAppUpdate() async {
+        let store = makeStore([(200, bundleZip(commit: "erste", editorApi: 1), "\"e1\""),
+                               (409, unsupportedBody, nil)])
+        await store.refresh(silent: false)
+        XCTAssertFalse(store.appUpdateRequired)
+
+        await store.refresh(silent: true)
+        XCTAssertEqual(store.state, .ready, "mit Cache bleibt der Editor bereit")
+        XCTAssertTrue(store.hasCache)
+        XCTAssertEqual(store.sourceCommit, "erste")
+        XCTAssertFalse(exists(pendingDir), "eine Absage darf kein Pending hinterlassen")
+        XCTAssertTrue(store.appUpdateRequired)
+        XCTAssertTrue(store.showsAppUpdateNotice)
+
+        store.dismissAppUpdateNotice()
+        XCTAssertFalse(store.showsAppUpdateNotice)
+        XCTAssertTrue(store.appUpdateRequired, "der Hinweis in den Einstellungen bleibt")
+    }
+
+    /// …und sobald der Server wieder einen unserer Majors bedient, fällt der
+    /// Hinweis weg.
+    func testAppUpdateFlagClearsWhenServerServesAgain() async {
+        let store = makeStore([(200, bundleZip(editorApi: 1), "\"e1\""),
+                               (409, unsupportedBody, nil),
+                               (304, Data(), "\"e1\"")])
+        await store.refresh(silent: false)
+        await store.refresh(silent: true)
+        XCTAssertTrue(store.appUpdateRequired)
+
+        await store.refresh(silent: true)
+        XCTAssertFalse(store.appUpdateRequired)
+        XCTAssertFalse(store.showsAppUpdateNotice)
+    }
+
+    /// Ohne Cache gibt es nichts zu behalten: klarer Fehlerzustand statt
+    /// Ladebildschirm.
+    func testUnsupportedEditorApiWithoutCacheFails() async {
+        let store = makeStore([(409, unsupportedBody, nil)])
+        await store.refresh(silent: false)
+        guard case .failed(let message) = store.state else {
+            return XCTFail("erwartet .failed, bekam \(store.state)")
+        }
+        XCTAssertEqual(message, t("bundle.appUpdate.noCache"))
+        XCTAssertFalse(store.hasCache)
+        XCTAssertTrue(store.appUpdateRequired)
+    }
+
+    /// Ein Bundle, dessen Manifest einen fremden Major trägt, wird nicht
+    /// installiert — auch wenn der Server es (fälschlich) ausliefert.
+    func testManifestWithUnsupportedEditorApiIsNotInstalled() async {
+        let store = makeStore([(200, bundleZip(commit: "erste", editorApi: 1), "\"e1\""),
+                               (200, bundleZip(commit: "fremd", editorApi: 99), "\"e2\"")])
+        await store.refresh(silent: false)
+        await store.refresh(silent: true)
+
+        XCTAssertEqual(store.state, .ready)
+        XCTAssertEqual(store.sourceCommit, "erste")
+        XCTAssertFalse(exists(pendingDir), "fremder Major darf nicht vorbereitet werden")
+        XCTAssertTrue(store.appUpdateRequired)
+    }
+
+    /// Ein Manifest ohne `editorApi` (Server vor der Versionierung) gilt als Major 1.
+    func testManifestWithoutEditorApiIsAccepted() async {
+        let store = makeStore([(200, bundleZip(), nil)])
+        await store.refresh(silent: false)
+        XCTAssertEqual(store.state, .ready)
+        XCTAssertFalse(store.appUpdateRequired)
     }
 }

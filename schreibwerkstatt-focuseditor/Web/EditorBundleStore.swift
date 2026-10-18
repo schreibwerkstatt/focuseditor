@@ -19,9 +19,18 @@
 //  tauglich) entpackt. Das `index.html` (Boot/Bridge) ist NICHT im Bundle —
 //  der Client schreibt es aus WebAssets + den Manifest-`cssFiles`.
 //
+//  Bundle-Vertrag (Server-Repo contract/editor-api.d.ts): der Request meldet
+//  per `X-Editor-Api` die Majors, die diese Schale bedienen kann
+//  (`supportedEditorApiMajors`). Passt keiner, antwortet der Server
+//  `409 EDITOR_API_UNSUPPORTED` — dann bleibt das gecachte Bundle in Betrieb
+//  (wie bei einem Netzfehler) und die App zeigt „App-Update nötig". Dasselbe
+//  gilt für ein Bundle, dessen Manifest-`editorApi` nicht passt: es wird nicht
+//  installiert.
+//
 
 import Foundation
 import Combine
+import os
 
 @MainActor
 final class EditorBundleStore: ObservableObject {
@@ -39,6 +48,27 @@ final class EditorBundleStore: ObservableObject {
     @Published private(set) var sourceCommit: String?
     /// Läuft gerade ein manueller Update-Check? (Spinner in den Einstellungen.)
     @Published private(set) var isCheckingUpdate = false
+    /// Der Server liefert einen Editor-Major, den diese Schale nicht kann — erst
+    /// ein App-Update hilft. Bis dahin läuft das gecachte Bundle weiter. Fällt
+    /// zurück, sobald der Server wieder ein Bundle (oder 304) liefert.
+    @Published private(set) var appUpdateRequired = false
+    /// Banner „App-Update nötig" über der Schreibfläche; schliessbar, ohne dass
+    /// `appUpdateRequired` (Hinweis in den Einstellungen) verschwindet.
+    @Published private(set) var showsAppUpdateNotice = false
+
+    /// Majors des Bundle-Vertrags (contract/version.json → `editorApi`), die
+    /// diese Schale bedienen kann. EINE Stelle für den `X-Editor-Api`-Header und
+    /// die Prüfung des Manifest-Felds `editorApi`. Ein neuer Major kommt erst
+    /// dazu, wenn Bridge und Glue ihn tatsächlich können.
+    static let supportedEditorApiMajors: [Int] = [1]
+
+    /// Wert des `X-Editor-Api`-Headers, z. B. `1` oder `1,2`.
+    static var editorApiHeaderValue: String {
+        supportedEditorApiMajors.map(String.init).joined(separator: ",")
+    }
+
+    /// `error_code` der 409-Antwort, wenn kein unterstützter Major passt.
+    static let editorApiUnsupportedCode = "EDITOR_API_UNSUPPORTED"
 
     private let api: APIClient
     private let fileManager = FileManager.default
@@ -167,7 +197,10 @@ final class EditorBundleStore: ObservableObject {
             // würde dasselbe Update jede Session erneut gezogen). Sonst der
             // Live-Cache-ETag.
             let effectiveETag = (loadMeta(at: pendingMetaURL) ?? loadMeta())?.etag
-            let res = try await api.getRaw(bundlePath, ifNoneMatch: effectiveETag)
+            let res = try await api.getRaw(bundlePath, ifNoneMatch: effectiveETag,
+                                           headers: ["X-Editor-Api": Self.editorApiHeaderValue])
+            // 200/304 heisst: der Server bedient einen unserer Majors.
+            clearAppUpdateRequired()
 
             if res.notModified {
                 // Bundle unverändert. Den Live-Cache NICHT anfassen — die
@@ -189,12 +222,70 @@ final class EditorBundleStore: ObservableObject {
                 state = .ready
             }
         } catch {
+            if let serverMajor = Self.unsupportedEditorApi(in: error) {
+                markAppUpdateRequired(serverMajor: serverMajor)
+                if hasCache {
+                    state = .ready   // gecachtes Bundle behalten, wie bei einem Netzfehler
+                } else if !silent {
+                    state = .failed(t("bundle.appUpdate.noCache"))
+                }
+                return
+            }
             if hasCache {
                 state = .ready   // Offline/Fehler: am vorhandenen Bundle festhalten
             } else if !silent {
                 state = .failed(Self.describe(error))
             }
         }
+    }
+
+    /// Banner „App-Update nötig" schliessen (der Hinweis in den Einstellungen bleibt).
+    func dismissAppUpdateNotice() {
+        showsAppUpdateNotice = false
+    }
+
+    // MARK: - Vertrags-Major
+
+    /// Body von `409 EDITOR_API_UNSUPPORTED`: `params.client` = die gemeldeten
+    /// Majors, `params.server` = der Major des Server-Bundles.
+    struct EditorApiUnsupportedBody: Decodable {
+        struct Params: Decodable {
+            let client: [Int]?
+            let server: Int?
+        }
+        let error_code: String?
+        let params: Params?
+    }
+
+    /// Manifest-`editorApi` passt nicht zu `supportedEditorApiMajors`.
+    private struct ManifestEditorApiUnsupported: Error {
+        let major: Int
+    }
+
+    /// Ist `error` die Absage „Major passt nicht" (Server-409 oder Manifest)?
+    /// Liefert dann den Server-Major (`-1`, falls der Body ihn nicht nennt),
+    /// sonst `nil`.
+    private static func unsupportedEditorApi(in error: Error) -> Int? {
+        if let manifestError = error as? ManifestEditorApiUnsupported {
+            return manifestError.major
+        }
+        guard case let AuthError.server(status, code, body) = error,
+              status == 409, code == editorApiUnsupportedCode else { return nil }
+        let parsed = body.flatMap { try? APIClient.makeDecoder().decode(EditorApiUnsupportedBody.self, from: $0) }
+        return parsed?.params?.server ?? -1
+    }
+
+    private func markAppUpdateRequired(serverMajor: Int) {
+        if !appUpdateRequired {
+            AppLog.editorBundle.notice("Editor-Bundle: Server-Major \(serverMajor, privacy: .public) passt nicht zu \(Self.editorApiHeaderValue, privacy: .public) — gecachtes Bundle bleibt, App-Update nötig")
+        }
+        appUpdateRequired = true
+        showsAppUpdateNotice = true
+    }
+
+    private func clearAppUpdateRequired() {
+        appUpdateRequired = false
+        showsAppUpdateNotice = false
     }
 
     // MARK: - Installation
@@ -230,6 +321,12 @@ final class EditorBundleStore: ObservableObject {
             try fileManager.createDirectory(at: dst.deletingLastPathComponent(),
                                             withIntermediateDirectories: true)
             try entry.data.write(to: dst)
+        }
+
+        // Ein Bundle mit fremdem Major nicht installieren — die Bridge könnte es
+        // nicht bedienen. Ohne Feld (Server vor der Versionierung) gilt Major 1.
+        if let major = manifest?.editorApi, !Self.supportedEditorApiMajors.contains(major) {
+            throw ManifestEditorApiUnsupported(major: major)
         }
 
         // Client-eigenes index.html (Boot/Bridge) aus dem Manifest erzeugen.
@@ -296,8 +393,11 @@ final class EditorBundleStore: ObservableObject {
 
     // MARK: - Meta (ETag/Commit)
 
-    private struct BundleManifest: Decodable {
+    /// `bundle-manifest.json` im ZIP (contract/editor-api.d.ts → `BundleManifest`).
+    struct BundleManifest: Decodable {
         let sourceCommit: String?
+        /// Major dieses Bundles; fehlt bei Servern vor der Versionierung.
+        let editorApi: Int?
         let jsFiles: [String]?
         let cssFiles: [String]?
     }

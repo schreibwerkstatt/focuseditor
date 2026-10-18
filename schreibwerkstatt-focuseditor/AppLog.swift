@@ -27,6 +27,8 @@ enum AppLog {
     static let account = make("account")
     /// WebView-Bridge (auch der Kanal für die `log`-Op der WebView).
     static let bridge = make("bridge")
+    /// OTA-Lader des Editor-Bundles (Download, Vertrags-Major).
+    static let editorBundle = make("editor-bundle")
     /// Buch-Export als Markdown.
     static let export = make("export")
     /// Serverseitiges Seiten-Lektorat.

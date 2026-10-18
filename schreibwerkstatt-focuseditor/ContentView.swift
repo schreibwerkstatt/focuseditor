@@ -81,10 +81,11 @@ private struct EditorHostView: View {
     /// hätte die 64 gesprengt und die Banner zum Überlappen gebracht).
     ///
     /// Rangfolge: der Save-Fehler wiegt am schwersten (Text NICHT gesichert),
-    /// dann das Lektorats-Ergebnis, dann der Widerrufen-Hinweis, zuletzt die
-    /// Export-Meldung (rein informativ).
+    /// dann das Lektorats-Ergebnis, dann der Widerrufen-Hinweis, dann die
+    /// Export-Meldung (rein informativ), zuletzt „App-Update nötig" (der Editor
+    /// läuft mit dem gecachten Bundle weiter).
     private enum Banner {
-        case saveError, lektorat, history, export
+        case saveError, lektorat, history, export, appUpdate
     }
 
     private func isVisible(_ banner: Banner) -> Bool {
@@ -101,6 +102,7 @@ private struct EditorHostView: View {
             case .done, .failed: return true
             case .idle, .exporting: return false
             }
+        case .appUpdate: return editorBundle.showsAppUpdateNotice
         }
     }
 
@@ -125,6 +127,14 @@ private struct EditorHostView: View {
             }
             if isVisible(.export) {
                 BookExportBanner()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if isVisible(.appUpdate) {
+                NoticeBanner(tone: .info,
+                             icon: "arrow.down.app",
+                             title: t("bundle.appUpdate.title"),
+                             message: t("bundle.appUpdate.message"),
+                             dismiss: { editorBundle.dismissAppUpdateNotice() })
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -214,6 +224,7 @@ private struct EditorHostView: View {
         .animation(.easeOut(duration: 0.18), value: isLektoratBannerVisible)
         .animation(.easeOut(duration: 0.18), value: library.historyNotice)
         .animation(.easeOut(duration: 0.18), value: isVisible(.export))
+        .animation(.easeOut(duration: 0.18), value: isVisible(.appUpdate))
         // Toolbar-Accessory nur zeigen, solange der Editor sichtbar ist (sonst
         // stünde im Login-/Ladezustand ein leerer Streifen in der Titelleiste).
         .onAppear { windowChrome.setToolbarVisible(true) }

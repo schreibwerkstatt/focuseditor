@@ -24,8 +24,17 @@ final class APIClient {
     var onUnauthorized: ((_ usedToken: String?) -> Void)?
 
     private let session: URLSession
-    private let decoder = JSONDecoder()
-    private let encoder = JSONEncoder()
+    private let decoder = APIClient.makeDecoder()
+    private let encoder = APIClient.makeEncoder()
+
+    /// Das Decoder-Setup ALLER Server-Antworten. Eine Stelle, damit die
+    /// Vertrags-Tests (`ContractFixtureTests`) mit genau dem Decoder dekodieren,
+    /// den die App benutzt — und Stellen, die einen Fehler-Body selbst lesen
+    /// (409/423, Konto-Löschung), nicht still einen anders konfigurierten bauen.
+    nonisolated static func makeDecoder() -> JSONDecoder { JSONDecoder() }
+
+    /// Gegenstück für Request-Bodies (s. `makeDecoder`).
+    nonisolated static func makeEncoder() -> JSONEncoder { JSONEncoder() }
 
     init(tokenProvider: @escaping () -> String?,
          session: URLSession? = nil) {
@@ -148,11 +157,15 @@ final class APIClient {
 
     /// Roh-GET für binäre Ressourcen. Behandelt `304 Not Modified` NICHT als
     /// Fehler (für konditionale Anfragen via `If-None-Match`). 401 schlägt wie
-    /// üblich auf `onUnauthorized` durch.
-    func getRaw(_ path: String, ifNoneMatch etag: String? = nil) async throws -> RawResponse {
+    /// üblich auf `onUnauthorized` durch. `headers` = zusätzliche Request-Header
+    /// (z. B. `X-Editor-Api` beim Editor-Bundle).
+    func getRaw(_ path: String,
+                ifNoneMatch etag: String? = nil,
+                headers: [String: String] = [:]) async throws -> RawResponse {
         // Roh-GET: kein `Accept: application/json` (Ziel ist ein ZIP), aber
         // optionaler `If-None-Match`.
-        let request = try buildRequest(path, method: .GET, acceptJSON: false, ifNoneMatch: etag)
+        let request = try buildRequest(path, method: .GET, acceptJSON: false,
+                                       ifNoneMatch: etag, extraHeaders: headers)
         let (http, data) = try await perform(request)
 
         let responseETag = http.value(forHTTPHeaderField: "ETag")
@@ -202,7 +215,8 @@ final class APIClient {
         body: Encodable? = nil,
         overrideToken: String? = nil,
         acceptJSON: Bool = true,
-        ifNoneMatch: String? = nil
+        ifNoneMatch: String? = nil,
+        extraHeaders: [String: String] = [:]
     ) throws -> URLRequest {
         // Pfad an die Basis ANHÄNGEN statt relativ aufzulösen: `URL(string:
         // "/content/…", relativeTo:)` ersetzt einen Pfad der Basis (Server unter
@@ -232,6 +246,9 @@ final class APIClient {
         }
         if let ifNoneMatch {
             request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
+        }
+        for (field, value) in extraHeaders {
+            request.setValue(value, forHTTPHeaderField: field)
         }
         return request
     }

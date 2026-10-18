@@ -134,7 +134,7 @@ extension SyncEngine {
                 try await confirmPush(pushed.entry, resp: pushed.resp)
             } catch let AuthError.server(status, _, body) where status == 409 {
                 // Stale-Write → 3-Wege-Block-Merge versuchen, sonst Konflikt erfassen.
-                let c = body.flatMap { try? JSONDecoder().decode(ConflictBody.self, from: $0) }
+                let c = body.flatMap { try? APIClient.makeDecoder().decode(ConflictBody.self, from: $0) }
                 await resolveConflict(entry: entry, conflict: c)
             } catch let AuthError.server(status, _, body) where status == 423 {
                 // Seite serverseitig gesperrt (Lektorat) — später erneut versuchen,
@@ -143,7 +143,7 @@ extension SyncEngine {
                 // Das genaue Lock-Ende aus dem 423-Body übernehmen, falls vorhanden
                 // (langer Lektorats-Lock → keine nutzlosen 60-s-Re-Versuche/Log-Spam);
                 // sonst auf den festen Backoff zurückfallen.
-                let lock = body.flatMap { try? JSONDecoder().decode(LockBody.self, from: $0) }
+                let lock = body.flatMap { try? APIClient.makeDecoder().decode(LockBody.self, from: $0) }
                 let until: Date
                 if let expISO = lock?.expires_at, let exp = ISOTime.date(expISO), exp > now {
                     until = exp

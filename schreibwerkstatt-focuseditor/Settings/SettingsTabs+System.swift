@@ -186,6 +186,13 @@ struct AccountSettingsTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                // Server liefert einen Editor-Major, den diese App nicht kann.
+                if editorBundle.appUpdateRequired {
+                    Label(t("bundle.appUpdate.message"), systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(BrandColor.error)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section(t("settings.account.maintenanceSection")) {

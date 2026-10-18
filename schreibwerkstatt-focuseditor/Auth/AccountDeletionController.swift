@@ -74,11 +74,11 @@ final class AccountDeletionController: ObservableObject {
                 "/me/account",
                 method: .DELETE,
                 body: ConfirmBody(confirm: Self.confirmToken))
-            let error = try? JSONDecoder().decode(ServerErrorBody.self, from: data)
+            let error = try? APIClient.makeDecoder().decode(ServerErrorBody.self, from: data)
 
             switch status {
             case 200...299:
-                let purgeAt = (try? JSONDecoder().decode(DeletionResponse.self, from: data))?.scheduled_purge_at
+                let purgeAt = (try? APIClient.makeDecoder().decode(DeletionResponse.self, from: data))?.scheduled_purge_at
                 logger.notice("Konto serverseitig gelöscht — lokale Daten werden entfernt")
                 await onDeleted?()
                 phase = .done(purgeAt: purgeAt)
