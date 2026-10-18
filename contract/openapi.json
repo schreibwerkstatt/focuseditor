@@ -436,7 +436,7 @@
           },
           "merged": {
             "const": true,
-            "description": "Nur PUT mit `base_html`: der Server hat gegen einen fremden Stand kollisionsfrei block-gemergt. `html` ist der neue Stand — lokal übernehmen."
+            "description": "Nur PUT mit `base_html`: der Server hat gegen einen fremden Stand kollisionsfrei block-gemergt. `html` ist der neue Stand — lokal übernehmen. Der gemergte Write trägt keine Save-Kennung (`last_save_id: null`): Wiederholung und Nachfolger laufen erneut durch den Merge — Nachfolger mit `base_html` = zuletzt gesendetem Stand."
           }
         },
         "required": [

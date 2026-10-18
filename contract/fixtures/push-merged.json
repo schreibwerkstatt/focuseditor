@@ -22,7 +22,7 @@
     "position": 0,
     "html": "<p data-bid=\"c0000000000000a1\">Erster Absatz, am Mac.</p><p data-bid=\"c0000000000000a2\">Zweiter Absatz.</p><p data-bid=\"c0000000000000a3\">Dritter Absatz, offline.</p>",
     "updated_at": "2026-01-02T00:00:00.000Z",
-    "last_save_id": "6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b",
+    "last_save_id": null,
     "merged": true
   }
 }
