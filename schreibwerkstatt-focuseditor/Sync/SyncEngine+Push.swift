@@ -290,7 +290,10 @@ extension SyncEngine {
         // Konflikt — der Eintrag schreibt genau diesen Stand fort. Ohne Merge mit
         // dem Server-Stempel neu pushen. Nur EIGENE Kennungen zählen: ein Write
         // eines anderen Geräts setzt `last_save_id` auf null oder eine fremde.
-        if let sid = serverPage.last_save_id, entry.sentUnconfirmedIds.contains(sid) {
+        // Ohne Rücksicht auf die Schreibweise: der Server liefert `last_save_id`
+        // immer kleingeschrieben, eine alte gespeicherte Kennung könnte gross sein.
+        if let sid = serverPage.last_save_id?.lowercased(),
+           entry.sentUnconfirmedIds.contains(where: { $0.lowercased() == sid }) {
             await pushOwnContinuation(entry, serverPage: serverPage)
             return
         }

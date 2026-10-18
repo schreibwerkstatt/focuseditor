@@ -122,6 +122,31 @@ final class SyncEngineSaveIdTests: XCTestCase {
         XCTAssertEqual(store.pages["5"]?.html, "<p>eins zwei</p>")
     }
 
+    // Der Server liefert `last_save_id` immer kleingeschrieben; eine gespeicherte
+    // Kennung in Grossbuchstaben (Altbestand) muss trotzdem als eigene gelten.
+    func testOwnLostPushIsRecognizedRegardlessOfCase() async throws {
+        let store = FakeStore()
+        _ = try await store.save(id: "5", html: "<p>eins zwei</p>", baseUpdatedAt: nil)
+        let upper = "0B6F2C1E-7A4D-4E8B-9C3F-1D2E3F4A5B6C"
+        store.outbox["5"]?.sentUnconfirmedIds = [upper]
+        let editor = FakeEditor()
+        editor.mergeResult = MergeOutcome(merged: "<p>x</p>", conflictCount: 1)
+        let engine = makeEngine(store: store, editor: editor)
+        router.on("PUT", "/content/pages/5", [
+            Stub(status: 409, json: #"{"error_code":"PAGE_CONFLICT","server_updated_at":"\#(newer)"}"#),
+            Stub(status: 200, json: #"{"id":5,"updated_at":"\#(newest)"}"#),
+        ])
+        router.on("GET", "/content/pages/5", [Stub(status: 200, json:
+            #"{"id":5,"updated_at":"\#(newer)","html":"<p>eins</p>","last_save_id":"\#(upper.lowercased())"}"#)])
+
+        try await engine.pushOutbox()
+
+        XCTAssertTrue(engine.conflicts.isEmpty, "kleingeschriebene Server-Kennung = eigene grosse Kennung")
+        XCTAssertEqual(pushedBodies().last?["expected_updated_at"] as? String, newer, "ohne Merge neu gepusht")
+        let pending = try await store.pendingOutbox()
+        XCTAssertTrue(pending.isEmpty)
+    }
+
     // (b) Ein Retry desselben Eintrags trägt dieselbe `save_id`.
     func testRetryOfSameEntryKeepsSaveId() async throws {
         let store = FakeStore()
