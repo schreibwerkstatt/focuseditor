@@ -15,6 +15,9 @@
 //    SW_E2E_PAGE   Seiten-ID (Int)
 //
 //  Seed dazu: scripts/sw-e2e-seed.mjs gegen den laufenden Dev-Server.
+//  Oder gegen die Demo-Instanz (scripts/demo.env): die Werte als
+//  TEST_RUNNER_SW_E2E_* an xcodebuild übergeben, das überschreibt das Scheme
+//  (so macht es /release). Geschrieben wird nur in einen Wegwerf-Abschnitt.
 //
 
 import XCTest
@@ -78,22 +81,33 @@ final class SyncIntegrationTests: XCTestCase {
 
     /// Optimistic-Concurrency end-to-end: korrekter Push → 200 (Basis rückt vor),
     /// veralteter Push → 409 PAGE_CONFLICT mit dekodierbarem ConflictBody.
+    ///
+    /// Schreibt nie in `SW_E2E_PAGE`, sondern in einen eigens angelegten
+    /// Wegwerf-Abschnitt, der danach wieder gelöscht wird — so darf die Suite
+    /// auch gegen die Demo-Instanz laufen, deren Buch der App-Review sieht.
     func testPushSuccessThenConflict() async throws {
         let c = try cfg()
         let api = client(c)
 
-        let before = try await api.send("/content/pages/\(c.page)", decode: PushResponse.self)
+        let before = try await api.send(
+            "/content/pages", method: .POST,
+            body: CreatePageBody(book_id: c.book, name: "XCTest \(UUID().uuidString.prefix(8))"),
+            decode: PushResponse.self)
+        let pageId = before.id
+        addTeardownBlock {
+            try? await api.sendVoid("/content/pages/\(pageId)", method: .DELETE)
+        }
         let base = before.updated_at
 
         let ok = try await api.send(
-            "/content/pages/\(c.page)", method: .PUT,
+            "/content/pages/\(pageId)", method: .PUT,
             body: PushRequest(html: "<p data-bid=\"b1\">XCTest-Push.</p>", expected_updated_at: base),
             decode: PushResponse.self)
         XCTAssertNotEqual(ok.updated_at, base, "updated_at muss nach erfolgreichem Push vorrücken")
 
         do {
             _ = try await api.send(
-                "/content/pages/\(c.page)", method: .PUT,
+                "/content/pages/\(pageId)", method: .PUT,
                 body: PushRequest(html: "<p data-bid=\"b1\">stale.</p>", expected_updated_at: base),
                 decode: PushResponse.self)
             XCTFail("Erwartete 409 (veraltete Basis), bekam 200")
@@ -106,4 +120,9 @@ final class SyncIntegrationTests: XCTestCase {
                            "server_updated_at sollte dem zuletzt erfolgreichen Push entsprechen")
         }
     }
+}
+
+private struct CreatePageBody: Encodable {
+    let book_id: Int
+    let name: String
 }

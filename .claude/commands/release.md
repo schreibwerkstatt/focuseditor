@@ -46,13 +46,20 @@ Schritte:
    xcodebuild -scheme Focuseditor-MAS -configuration Release -derivedDataPath build/mas build -quiet
    ```
    (Bei Kanal `appstore`/`beide` macht [scripts/archive-mas.sh](scripts/archive-mas.sh) diese Gegenprobe in Schritt 9 ohnehin selbst.)
-4. **Guards (Pflicht):**
+4. **Test-Suite (Pflicht):**
    ```bash
-   xcodebuild -scheme schreibwerkstatt-focuseditor -configuration Debug test \
-     -only-testing:schreibwerkstatt-focuseditorTests/SourceFileSizeTests \
-     -only-testing:schreibwerkstatt-focuseditorTests/DistributionTargetsTests
+   set -a; . scripts/demo.env; set +a
+   TEST_RUNNER_SW_E2E_BASE="$DEMO_BASE_URL" TEST_RUNNER_SW_E2E_TOKEN="$DEMO_DEVICE_TOKEN" \
+   TEST_RUNNER_SW_E2E_BOOK=1000001 TEST_RUNNER_SW_E2E_PAGE=1000001 \
+   xcodebuild -scheme schreibwerkstatt-focuseditor -configuration Debug test -quiet
    ```
-   Beide müssen grün sein. Datei-Größe schlägt an → siehe CLAUDE.md (aufteilen oder bewusst in `allowedOverLimit`). `DistributionTargetsTests` schlägt an → die zwei Kanäle sind auseinandergelaufen (Plist-Key nur in einer Datei, Sparkle/Entitlements im MAS-Target, Bundle-ID oder Quell-Gruppe verschieden, `Version.xcconfig` nicht mehr projektweit). Das **vor** dem Bump fixen — es würde sonst genau den anderen Kanal treffen.
+   Die ganze Suite, die `SyncIntegrationTests` gegen die **Demo-Instanz** (`TEST_RUNNER_*` überschreibt die `localhost`-Werte aus dem Scheme; Buch 1000001 = „Beispiel: Die Verwandlung"). Die Integrationstests lesen dort nur — der Push-/409-Test legt sich einen eigenen Wegwerf-Abschnitt an und löscht ihn wieder, der App-Review sieht nichts davon. Das Token nie ausgeben (Output ggf. durch `sed -E 's/swd_[0-9a-f]+/swd_<x>/g'` ziehen). Ist die Demo nicht erreichbar, scheitern genau diese 5 Tests mit einem Netzfehler — das melden, nicht als Code-Regress werten. Alles andere muss grün sein — ein roter Test stoppt den Release. Bewusst die volle Suite statt nur der Guards: der Stop-Hook fährt sie zwar auch, aber erst am Rundenende, also **nach** Commit, Push und Upload. Besonders wichtig sind dabei:
+   - `ContractFixtureTests` rot → der Server liefert etwas anders, als die App liest (`contract/CHANGELOG.md` lesen, DTO anpassen, nie die Fixture).
+   - `WebAssetsSyntaxTests` rot → Syntaxfehler im JS-Glue; die App bliebe in der WKWebView still tot.
+   - `LocalizationCatalogTests` / `ShortcutCatalogTests` rot → Katalog einseitig gepflegt bzw. ein Menü-Kürzel verdeckt ein Editor-Kürzel.
+   - `SourceFileSizeTests` / `DistributionTargetsTests` rot → s. unten.
+
+   Datei-Größe schlägt an → siehe CLAUDE.md (aufteilen oder bewusst in `allowedOverLimit`). `DistributionTargetsTests` schlägt an → die zwei Kanäle sind auseinandergelaufen (Plist-Key nur in einer Datei, Sparkle/Entitlements im MAS-Target, Bundle-ID oder Quell-Gruppe verschieden, `Version.xcconfig` nicht mehr projektweit). Das **vor** dem Bump fixen — es würde sonst genau den anderen Kanal treffen.
 5. **Release-Notes schreiben (Pflicht, [AppStore/whats-new.md](AppStore/whats-new.md)):** Für die neue Version einen Abschnitt **ganz oben** anlegen — je ein Code-Block `## <version> · Deutsch (max. 4000)` und `## <version> · English (max 4000)`, Aufbau wie beim Vorgänger. Die Datei ist die **Quelle** dieser Texte, nicht das ASC-Feld; ohne Abschnitt gibt es in Schritt 9 nichts zu kopieren.
    - **Bezug ist die letzte im Store veröffentlichte Version**, nicht der letzte Bump. Zwischen-Bumps, die nur als DMG rausgingen, sind für Store-Nutzer neu und gehören mit in den Text — Grundlage ist also der Diff seit der letzten `READY_FOR_SALE`-Version (live abfragen: `scripts/appstore-status.sh`, Zeile „Zuletzt veröffentlicht“), nicht `<letzter-tag>..HEAD`.
    - **Nutzersicht, keine Technik:** was sich für den Schreibenden ändert. Migrationen, Refactorings, Guards und Test-Änderungen kommen nicht vor.
