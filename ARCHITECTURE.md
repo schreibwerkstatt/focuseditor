@@ -161,7 +161,7 @@ Cache-Ort: `~/Library/Application Support/schreibwerkstatt-focuseditor/web-cache
 [Store/LocalStore.swift](schreibwerkstatt-focuseditor/Store/LocalStore.swift) definiert das `@MainActor protocol LocalStore` und die Modelle:
 
 - `StoredPage` — `id, html, title?, pageName?, bookId?, chapterId?, updatedAt (Epoch-ms), baseUpdatedAt? (Server-Basis als ms)`.
-- `OutboxEntry` — `pageId, html, baseUpdatedAt?, queuedAt`.
+- `OutboxEntry` — `pageId, html, baseUpdatedAt?, queuedAt, saveId, sentUnconfirmedIds` (Save-Kennungen, s. §5 Push; Spalten seit Migration `v6_outbox_saveIds`, Liste als JSON-Text).
 - `PageSummary` — leichte Listenzeile (ohne HTML); `displayName` bevorzugt `pageName` über `title`.
 - `PageStats` / `PageMetrics` ([Store/PageMetrics.swift](schreibwerkstatt-focuseditor/Store/PageMetrics.swift)) — Zeichen-/Wortzahl einer Seite, aus dem HTML gescannt (ein Durchgang über die Unicode-Skalare, kein Regex). Spiegelt bewusst die Editor-Zählung in der WebView (`countAndReport`, Leerraum-Läufe kollabieren, Blocktags = eine Zeilengrenze), damit Picker und Toolbar für die offene Seite dieselbe Zahl zeigen. `chars == 0` heisst verlässlich „unbeschrieben" (auch beim leeren Editor-Absatz `<p><br></p>`) — daran hängt das „leer"-Badge im Picker.
 
@@ -175,6 +175,7 @@ Protokoll-Methoden mit ihrer Semantik:
 | `save(id:html:baseUpdatedAt:)` | **local-first**: upsert Seite **+ Outbox-Eintrag** |
 | `pendingOutbox()` | offene Pushes, älteste zuerst |
 | `markPushed(id:queuedAt:serverUpdatedAtMillis:)` | quittiert Push — droppt Outbox-Eintrag **nur wenn `queuedAt` unverändert** (sonst liegt eine neuere Edit vor) |
+| `markSaveIdSent(pageId:queuedAt:)` / `forgetSaveIds(_:pageId:)` | `saveId` vor dem PUT als gesendet vermerken (`nil` = Eintrag inzwischen ersetzt) / Kennungen aus dem aktuellen Eintrag streichen (4xx oder bestätigt) |
 | `applyServerPage(...)` | Pull-Merge: setzt `updatedAt` **und** `baseUpdatedAt` auf Server-Stand, **kein** Outbox-Eintrag |
 | `deletePage(id:)` | räumt Seite + Outbox |
 
@@ -207,8 +208,14 @@ Ein Tick macht Push, dann Pull, dann gedrosselt Delete-Reconcile (`reconcileInte
 `pushOutbox()` iteriert die Outbox. Pro Eintrag:
 
 - Überspringt unaufgelöste Konflikte und Seiten **ohne Server-Basis** (PUT legt nicht an — neue Seiten via `POST`, nicht hier).
-- Sendet `PushRequest { html, expected_updated_at, source:"macapp" }`. `expected_updated_at` ist der **exakte Server-ISO-String** aus `SyncState.serverBaseISO` (nie aus Epoch-ms rekonstruiert).
-- **200** → Basis auf `resp.updated_at` vorrücken, `markPushed`. **409** → `resolveConflict`. **423** → überspringen (gesperrt). **404** → Basis verwerfen, Inhalt lokal behalten. **401** → ganzen Sync abbrechen.
+- Sendet `PushRequest { html, expected_updated_at, source:"macapp", device_id, save_id, own_save_ids }` (`sendOutboxEntry`). `expected_updated_at` ist der **exakte Server-ISO-String** aus `SyncState.serverBaseISO` (nie aus Epoch-ms rekonstruiert).
+- **200** (auch `save_match` `own`/`replay`) → `confirmPush`: `markPushed`, Basis auf `resp.updated_at`. **409** → `resolveConflict`. **423** → überspringen (gesperrt). **404** → Basis verwerfen, Inhalt lokal behalten. **401** → ganzen Sync abbrechen.
+
+**Save-Kennungen (verlorene Antwort ≠ Konflikt).** Geht die Antwort eines Pushs verloren, hat der Server trotzdem geschrieben; der nächste Push liefe mit der alten Basis in ein 409 gegen den eigenen Text (und nach Weitertippen im selben Absatz in die Konflikt-UI). Darum trägt jeder Outbox-Eintrag eine `saveId` (UUID, neu je Eintrag, ein Retry behält sie) und `sentUnconfirmedIds` (gesendete Pushs ohne Antwort, älteste zuerst). Regeln:
+- `saveId` wird **vor** dem PUT als gesendet vermerkt; ein ersetzender Save erbt die Liste (inkl. dieser Kennung), bekommt aber eine neue `saveId`. Mitgeschickt werden höchstens 16 frühere als `own_save_ids`.
+- 2xx → Eintrag weg (Liste mit); quittiert der Push nicht (Save während PUT), streicht der Nachfolger die bestätigten Kennungen. 4xx → eigene Kennung streichen (nicht geschrieben). Netzfehler/5xx → behalten.
+- **Sicherheitsnetz** in `resolveConflict`: ist `last_save_id` des frisch geholten Server-Stands in der Liste, ohne Merge mit dem Server-Stempel neu pushen (`pushOwnContinuation`).
+- **Nur reguläre Outbox-Pushs** tragen Kennungen. Auto-Merge- und Konflikt-Pushs enthalten fremde Absätze, die der Eintrag nicht kennt — mit registrierter Kennung überschriebe ein späterer Push nach verlorener Antwort sie still per `own`-Match. „Schreiber" heisst die Outbox dieses Geräts für diesen Abschnitt, nie Konto oder Geräte-ID.
 
 ### 409 → 3-Wege-Block-Merge
 

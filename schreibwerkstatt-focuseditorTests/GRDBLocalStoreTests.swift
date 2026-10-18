@@ -83,6 +83,58 @@ final class GRDBLocalStoreTests: XCTestCase {
         XCTAssertEqual(outbox.first?.baseUpdatedAt, 500, "die Basis bleibt erhalten, wenn keine neue kommt")
     }
 
+    // (d) Save-Kennungen: Ersetzen vergibt eine neue `saveId` und erbt die
+    // gesendete; beides überlebt einen Neustart.
+    func testSaveIdsSurviveReopenAndAreInheritedOnReplace() async throws {
+        let store = try makeStore()
+        _ = try await store.save(id: "1", html: "<p>A</p>", baseUpdatedAt: 500)
+        let first = try await store.pendingOutbox()[0]
+        XCTAssertFalse(first.saveId.isEmpty)
+        XCTAssertEqual(first.sentUnconfirmedIds, [], "noch nicht gesendet")
+        let sent = try await store.markSaveIdSent(pageId: "1", queuedAt: first.queuedAt)
+        XCTAssertEqual(sent?.sentUnconfirmedIds, [first.saveId])
+
+        _ = try await store.save(id: "1", html: "<p>B</p>", baseUpdatedAt: nil)
+        let replaced = try await store.pendingOutbox()[0]
+        XCTAssertNotEqual(replaced.saveId, first.saveId, "neuer Text → neue Kennung")
+        XCTAssertEqual(replaced.sentUnconfirmedIds, [first.saveId], "die gesendete wird geerbt")
+        let stale = try await store.markSaveIdSent(pageId: "1", queuedAt: first.queuedAt)
+        XCTAssertNil(stale, "ein ersetzter Eintrag wird nicht mehr als gesendet vermerkt")
+
+        let reopened = try makeStore()
+        let afterRestart = try await reopened.pendingOutbox()[0]
+        XCTAssertEqual(afterRestart.saveId, replaced.saveId)
+        XCTAssertEqual(afterRestart.sentUnconfirmedIds, [first.saveId])
+
+        try await reopened.forgetSaveIds([first.saveId], pageId: "1")
+        let forgotten = try await reopened.pendingOutbox()[0]
+        XCTAssertEqual(forgotten.sentUnconfirmedIds, [])
+        XCTAssertEqual(forgotten.saveId, replaced.saveId)
+    }
+
+    func testOwnSaveIdsAreCappedOldestFirst() {
+        var entry = OutboxEntry(pageId: "1", html: "", baseUpdatedAt: nil, queuedAt: 0)
+        for _ in 0..<20 {
+            entry = OutboxEntry.queued(pageId: "1", html: "", baseUpdatedAt: nil, queuedAt: 0,
+                                       replacing: entry.markingSent())
+        }
+        let sent = entry.markingSent()
+        XCTAssertEqual(sent.sentUnconfirmedIds.count, OutboxEntry.maxOwnSaveIds + 1)
+        XCTAssertEqual(sent.sentUnconfirmedIds.last, sent.saveId, "jüngste zuletzt")
+        XCTAssertEqual(sent.ownSaveIdsForPush.count, OutboxEntry.maxOwnSaveIds)
+        XCTAssertFalse(sent.ownSaveIdsForPush.contains(sent.saveId), "eigene Kennung geht als save_id")
+    }
+
+    /// Ein Eintrag von vor den Save-Kennungen (JSON-Snapshot des Platzhalter-
+    /// Spiegels) lädt weiter und bekommt eine frische Kennung.
+    func testLegacyOutboxEntryDecodesWithFreshSaveId() throws {
+        let json = #"{"pageId":"1","html":"<p>A</p>","baseUpdatedAt":500,"queuedAt":1}"#
+        let entry = try JSONDecoder().decode(OutboxEntry.self, from: Data(json.utf8))
+        XCTAssertEqual(entry.html, "<p>A</p>")
+        XCTAssertEqual(UUID(uuidString: entry.saveId)?.uuidString.lowercased(), entry.saveId)
+        XCTAssertEqual(entry.sentUnconfirmedIds, [])
+    }
+
     func testIdenticalHtmlDoesNotQueueAgain() async throws {
         let store = try makeStore()
         let first = try await store.save(id: "1", html: "<p>A</p>", baseUpdatedAt: nil)

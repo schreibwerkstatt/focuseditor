@@ -142,7 +142,8 @@ final class FakeStore: LocalStore {
                               chapterId: pages[id]?.chapterId, updatedAt: now,
                               baseUpdatedAt: baseUpdatedAt ?? pages[id]?.baseUpdatedAt)
         pages[id] = page
-        outbox[id] = OutboxEntry(pageId: id, html: html, baseUpdatedAt: page.baseUpdatedAt, queuedAt: now)
+        outbox[id] = .queued(pageId: id, html: html, baseUpdatedAt: page.baseUpdatedAt, queuedAt: now,
+                             replacing: outbox[id])
         return page
     }
 
@@ -156,6 +157,16 @@ final class FakeStore: LocalStore {
         outbox[id] = nil
         pages[id]?.baseUpdatedAt = serverUpdatedAtMillis
         return true
+    }
+
+    func markSaveIdSent(pageId: String, queuedAt: Double) async throws -> OutboxEntry? {
+        guard let e = outbox[pageId], e.queuedAt == queuedAt else { return nil }
+        outbox[pageId] = e.markingSent()
+        return outbox[pageId]
+    }
+
+    func forgetSaveIds(_ ids: [String], pageId: String) async throws {
+        outbox[pageId] = outbox[pageId]?.forgetting(ids)
     }
 
     func applyServerPage(id: String, html: String, pageName: String?, bookId: Int?,

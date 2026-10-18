@@ -135,6 +135,21 @@ final class GRDBLocalStore: LocalStore {
                 t.add(column: "wordCount", .integer)
             }
         }
+        m.registerMigration("v6_outbox_saveIds") { db in
+            // Save-Kennungen je Outbox-Eintrag (`save_id` / `own_save_ids`, s.
+            // `OutboxEntry`). Die Liste liegt als JSON-Text (GRDB kodiert Codable-
+            // Arrays so). Ein Bestandseintrag bekommt hier eine echte UUID —
+            // eine SQL-Zufallszahl wäre kein UUID v4, und der Server ignoriert
+            // ungültige Kennungen still.
+            try db.alter(table: "outbox") { t in
+                t.add(column: "saveId", .text).notNull().defaults(to: "")
+                t.add(column: "sentUnconfirmedIds", .text).notNull().defaults(to: "[]")
+            }
+            for pageId in try String.fetchAll(db, sql: "SELECT pageId FROM outbox") {
+                try db.execute(sql: "UPDATE outbox SET saveId = ? WHERE pageId = ?",
+                               arguments: [OutboxEntry.newSaveId(), pageId])
+            }
+        }
         return m
     }
 
@@ -326,8 +341,11 @@ final class GRDBLocalStore: LocalStore {
                                   baseUpdatedAt: base)
             try page.save(db)
 
-            // Outbox: einen Eintrag pro Seite (save = upsert auf pageId).
-            let entry = OutboxEntry(pageId: id, html: html, baseUpdatedAt: base, queuedAt: now)
+            // Outbox: einen Eintrag pro Seite (save = upsert auf pageId). Ersetzt er
+            // einen älteren, erbt er dessen unbestätigte Save-Kennungen.
+            let previous = try OutboxEntry.fetchOne(db, key: id)
+            let entry = OutboxEntry.queued(pageId: id, html: html, baseUpdatedAt: base, queuedAt: now,
+                                           replacing: previous)
             try entry.save(db)
             // Volltext-Index + Zählwerte nachführen (selbe Transaktion → kein Drift).
             try Self.upsertDerived(db, id: id, html: html, pageName: page.pageName)
@@ -352,6 +370,24 @@ final class GRDBLocalStore: LocalStore {
                 try page.update(db)
             }
             return true
+        }
+    }
+
+    func markSaveIdSent(pageId: String, queuedAt: Double) async throws -> OutboxEntry? {
+        try await dbQueue.write { db in
+            guard let entry = try OutboxEntry.fetchOne(db, key: pageId), entry.queuedAt == queuedAt else {
+                return nil
+            }
+            let sent = entry.markingSent()
+            try sent.update(db)
+            return sent
+        }
+    }
+
+    func forgetSaveIds(_ ids: [String], pageId: String) async throws {
+        try await dbQueue.write { db in
+            guard let entry = try OutboxEntry.fetchOne(db, key: pageId) else { return }
+            try entry.forgetting(ids).update(db)
         }
     }
 

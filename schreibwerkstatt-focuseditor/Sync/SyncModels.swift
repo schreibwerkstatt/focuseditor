@@ -60,11 +60,17 @@ struct BookSyncResponse: Decodable {
 /// (DeviceIdentity) — der Server stempelt damit `pages.last_editor_device_id` und
 /// registriert das Gerät als Buch-Präsenz, sodass ein parallel offener Browser
 /// diesen Push als Remote-Change erkennt und die Seite automatisch nachlädt.
+///
+/// `save_id`/`own_save_ids` (Save-Kennung, s. `OutboxEntry`): nur reguläre
+/// Outbox-Pushs setzen sie; `nil` lässt das Feld weg. Ein Server ohne das
+/// Feature ignoriert beide.
 struct PushRequest: Encodable {
     let html: String
     let expected_updated_at: String?
     var source: String = "macapp"
     var device_id: String = DeviceIdentity.current
+    var save_id: String?
+    var own_save_ids: [String]?
 }
 
 /// 200-Antwort von `PUT /content/pages/:id`. Seiten-ID heißt hier `id`.
@@ -79,6 +85,12 @@ struct PushResponse: Decodable {
     // über den Buch-Tree nach (LocalStore.assignBook). Siehe CLAUDE.md.
     let book_id: Int?
     let chapter_id: Int?
+    /// Kennung des letzten Writes (`GET`); `null` nach einem Write ohne Kennung
+    /// (anderes Gerät, Web, Job). Fehlt bei einem Server ohne das Feature.
+    var last_save_id: String?
+    /// Nur in der PUT-Antwort: `"replay"` (Wiederholung, nichts geschrieben) oder
+    /// `"own"` (veralteter Stempel, aber die letzte Kennung war unsere).
+    var save_match: String?
 }
 
 /// 409-Body `PAGE_CONFLICT`.

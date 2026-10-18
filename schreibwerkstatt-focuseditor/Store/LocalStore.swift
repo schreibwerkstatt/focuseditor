@@ -46,6 +46,88 @@ nonisolated struct OutboxEntry: Codable, Equatable {
     var baseUpdatedAt: Double?
     /// Wann der Eintrag lokal angelegt wurde (Epoch ms).
     var queuedAt: Double
+    /// Save-Kennung dieses Stands (`save_id`, UUID v4) — neu je Eintrag, ein
+    /// Retry DESSELBEN Eintrags behält sie. Daran erkennt der Server eine
+    /// Wiederholung, deren erste Antwort unterwegs verloren ging (`replay`).
+    var saveId: String = OutboxEntry.newSaveId()
+    /// Kennungen gesendeter Pushs dieses Abschnitts ohne Antwort, älteste zuerst
+    /// (`own_save_ids`). Enthält die eigene `saveId`, sobald sie gesendet wurde —
+    /// ein ersetzender Eintrag erbt die Liste und damit auch sie. Nur die Outbox
+    /// DIESES Geräts für DIESEN Abschnitt: fremde Kennungen kämen nie hinein.
+    var sentUnconfirmedIds: [String] = []
+}
+
+// MARK: - Save-Kennungen (`save_id` / `own_save_ids`)
+//
+// Geht die Antwort eines Pushs verloren, hat der Server den Text trotzdem
+// geschrieben, und der nächste Push läuft mit der alten Basis in ein 409 gegen
+// den eigenen Stand. Mit den Kennungen erkennt der Server das selbst
+// (`docs/clients.md` im Hauptrepo, «Save-Kennung»).
+//
+// Sicher ist das nur, weil ein Outbox-Eintrag den Editor-Stand dieses Geräts
+// fortschreibt: was nach einem gesendeten Push entsteht, enthält dessen Text.
+// Pushs mit Inhalt, den der Eintrag NICHT kennt (Auto-Merge, Konflikt-Auflösung),
+// tragen darum bewusst keine Kennung — sonst überschriebe ein späterer Push nach
+// verlorener Antwort die eingemergten fremden Absätze still.
+
+nonisolated extension OutboxEntry {
+    /// Höchstzahl der `own_save_ids` je Push (Server-Vertrag); gespeichert wird
+    /// eine mehr (die eigene). Ältere Kennungen fallen weg — trifft der Server
+    /// dann keine mehr, bleibt der 409-Merge der Rückweg.
+    static let maxOwnSaveIds = 16
+
+    static func newSaveId() -> String { UUID().uuidString.lowercased() }
+
+    /// Neuer Eintrag für einen lokalen Save. Ersetzt er einen älteren, erbt er
+    /// dessen unbestätigte Kennungen (inkl. der `saveId`, falls schon gesendet),
+    /// bekommt aber eine NEUE eigene `saveId` — es ist ein anderer Text.
+    static func queued(pageId: String, html: String, baseUpdatedAt: Double?,
+                       queuedAt: Double, replacing old: OutboxEntry?) -> OutboxEntry {
+        OutboxEntry(pageId: pageId, html: html, baseUpdatedAt: baseUpdatedAt, queuedAt: queuedAt,
+                    sentUnconfirmedIds: old?.sentUnconfirmedIds ?? [])
+    }
+
+    /// Die eigene `saveId` als gesendet vermerkt (vor dem Request, nicht danach:
+    /// ersetzt ein Save den Eintrag während des PUT, muss der Nachfolger sie erben).
+    func markingSent() -> OutboxEntry {
+        var e = self
+        if !e.sentUnconfirmedIds.contains(saveId) { e.sentUnconfirmedIds.append(saveId) }
+        // +1: die eigene Kennung liegt mit in der Liste, geht aber als `save_id`.
+        e.sentUnconfirmedIds = Array(e.sentUnconfirmedIds.suffix(Self.maxOwnSaveIds + 1))
+        return e
+    }
+
+    func forgetting(_ ids: [String]) -> OutboxEntry {
+        var e = self
+        e.sentUnconfirmedIds.removeAll { ids.contains($0) }
+        return e
+    }
+
+    /// `own_save_ids` für den Push: frühere unbestätigte Kennungen, älteste
+    /// zuerst, höchstens 16. Die eigene `saveId` geht als `save_id` mit.
+    var ownSaveIdsForPush: [String] {
+        Array(sentUnconfirmedIds.filter { $0 != saveId }.suffix(Self.maxOwnSaveIds))
+    }
+}
+
+// Eigenes Decoding: ein Snapshot/Datensatz von vor den Save-Kennungen hat beide
+// Felder nicht — er bekommt eine frische Kennung statt am Decode zu scheitern
+// (sonst lüde der JSON-Platzhalter-Spiegel die ganze Outbox nicht mehr).
+nonisolated extension OutboxEntry {
+    private enum CodingKeys: String, CodingKey {
+        case pageId, html, baseUpdatedAt, queuedAt, saveId, sentUnconfirmedIds
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pageId = try c.decode(String.self, forKey: .pageId)
+        html = try c.decode(String.self, forKey: .html)
+        baseUpdatedAt = try c.decodeIfPresent(Double.self, forKey: .baseUpdatedAt)
+        queuedAt = try c.decode(Double.self, forKey: .queuedAt)
+        let sid = try c.decodeIfPresent(String.self, forKey: .saveId) ?? ""
+        saveId = sid.isEmpty ? Self.newSaveId() : sid
+        sentUnconfirmedIds = try c.decodeIfPresent([String].self, forKey: .sentUnconfirmedIds) ?? []
+    }
 }
 
 /// Kopplungsschicht zum lokalen Speicher. Bridge und Shell sprechen nur dieses
@@ -89,6 +171,16 @@ protocol LocalStore: AnyObject {
     /// andere Basis und muss separat gepusht werden).
     @discardableResult
     func markPushed(id: String, queuedAt: Double, serverUpdatedAtMillis: Double) async throws -> Bool
+
+    /// Vermerkt die `saveId` des Eintrags als gesendet (`OutboxEntry.markingSent`)
+    /// — VOR dem PUT. Liefert den aktualisierten Eintrag; `nil`, wenn er seit
+    /// `queuedAt` ersetzt wurde (dann geht der Nachfolger beim nächsten Tick raus).
+    func markSaveIdSent(pageId: String, queuedAt: Double) async throws -> OutboxEntry?
+
+    /// Entfernt Kennungen aus den unbestätigten des AKTUELLEN Eintrags (egal ob
+    /// inzwischen ersetzt — der Nachfolger hat sie geerbt): nach einem 4xx (der
+    /// Server hat nicht geschrieben) oder einer Antwort, die sie bestätigt hat.
+    func forgetSaveIds(_ ids: [String], pageId: String) async throws
 
     /// Schreibt eine vom Server gezogene Seite in den Spiegel, OHNE einen
     /// Outbox-Eintrag zu erzeugen (Pull ist keine lokale Änderung). Setzt
@@ -295,8 +387,9 @@ final class InMemoryLocalStore: LocalStore {
         pages[id] = page
 
         // Outbox: einen Eintrag pro Seite vorhalten (jüngster Stand gewinnt).
+        let old = outbox.first { $0.pageId == id }
         outbox.removeAll { $0.pageId == id }
-        outbox.append(OutboxEntry(pageId: id, html: html, baseUpdatedAt: base, queuedAt: now))
+        outbox.append(.queued(pageId: id, html: html, baseUpdatedAt: base, queuedAt: now, replacing: old))
 
         persistSnapshot()
         return page
@@ -350,6 +443,20 @@ final class InMemoryLocalStore: LocalStore {
         }
         persistSnapshot()
         return true
+    }
+
+    func markSaveIdSent(pageId: String, queuedAt: Double) async throws -> OutboxEntry? {
+        guard let idx = outbox.firstIndex(where: { $0.pageId == pageId }),
+              outbox[idx].queuedAt == queuedAt else { return nil }
+        outbox[idx] = outbox[idx].markingSent()
+        persistSnapshot()
+        return outbox[idx]
+    }
+
+    func forgetSaveIds(_ ids: [String], pageId: String) async throws {
+        guard let idx = outbox.firstIndex(where: { $0.pageId == pageId }) else { return }
+        outbox[idx] = outbox[idx].forgetting(ids)
+        persistSnapshot()
     }
 
     func applyServerPage(id: String, html: String, pageName: String?, bookId: Int?, chapterId: Int?, serverUpdatedAtMillis: Double) async throws {

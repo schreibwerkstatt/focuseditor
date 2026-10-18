@@ -124,48 +124,14 @@ extension SyncEngine {
                 continue
             }
 
-            let req = PushRequest(html: entry.html, expected_updated_at: base)
             do {
-                let resp = try await reachableSend {
-                    try await api.send("/content/pages/\(entry.pageId)",
-                                       method: .PUT,
-                                       body: req,
-                                       decode: PushResponse.self)
+                guard let pushed = try await sendOutboxEntry(entry, base: base) else {
+                    log.info("Push verschoben (Eintrag beim Senden ersetzt): \(entry.pageId, privacy: .public)")
+                    continue
                 }
                 // Serverwechsel während des PUT → nichts mehr in den (neuen) Spiegel schreiben.
                 try ensureNotSuperseded()
-                // ERST Outbox atomar quittieren, DANN die Basis vorrücken — und nur,
-                // wenn wirklich quittiert wurde. Hat der Nutzer WÄHREND des PUT erneut
-                // gespeichert, trägt der neue Outbox-Eintrag eine andere Basis; die
-                // Basis dann NICHT auf diesen überholten Push-Stand vorrücken (sonst
-                // pushte der nächste Tick das neue HTML gegen eine Basis, die nicht zu
-                // seinem Inhalt passt). Datenverlust-Schutz (s. markPushed-Vertrag).
-                let quittiert = try await store.markPushed(
-                    id: entry.pageId,
-                    queuedAt: entry.queuedAt,
-                    serverUpdatedAtMillis: ISOTime.millis(resp.updated_at) ?? entry.queuedAt)
-                if quittiert {
-                    // Merge-Ancestor = gerade gepushtes HTML (nun der Server-Stand).
-                    try? await store.setServerBaseHtml(entry.html, id: entry.pageId)
-                    stateStore.mutate {
-                        $0.serverBaseISO[entry.pageId] = resp.updated_at   // exakte Server-ISO
-                    }
-                    // Erfolgreicher Push → eine etwaige Lock-Backoff-Frist aufheben.
-                    lockedUntil[entry.pageId] = nil
-                } else {
-                    // Zwischenzeitlicher Save → der neue Outbox-Eintrag bleibt und geht
-                    // beim nächsten Tick raus. Die Basis trotzdem vorrücken: der Server
-                    // hält jetzt GENAU `entry.html` unter `resp.updated_at`, und der neue
-                    // Eintrag ist eine Fortschreibung desselben Editor-Stands. Bliebe die
-                    // alte Basis stehen, liefe der nächste Push in ein 409 gegen den
-                    // eigenen Text und der Merge meldete eine Kollision (alle drei
-                    // Fassungen des Absatzes verschieden) — Konflikt-Modal gegen sich
-                    // selbst, bei „Server übernehmen" mit Verlust der jüngsten Zeichen.
-                    try? await store.setServerBaseHtml(entry.html, id: entry.pageId)
-                    stateStore.mutate { $0.serverBaseISO[entry.pageId] = resp.updated_at }
-                    lockedUntil[entry.pageId] = nil
-                    log.info("Push nicht quittiert (Save während PUT), Basis vorgerückt: \(entry.pageId, privacy: .public)")
-                }
+                try await confirmPush(pushed.entry, resp: pushed.resp)
             } catch let AuthError.server(status, _, body) where status == 409 {
                 // Stale-Write → 3-Wege-Block-Merge versuchen, sonst Konflikt erfassen.
                 let c = body.flatMap { try? JSONDecoder().decode(ConflictBody.self, from: $0) }
@@ -214,6 +180,75 @@ extension SyncEngine {
         }
     }
 
+    /// Sendet einen Outbox-Eintrag als `PUT` gegen `base` — mit Save-Kennung:
+    /// `save_id` wird VOR dem Request als gesendet vermerkt (ersetzt ein Save den
+    /// Eintrag während des PUT, erbt der Nachfolger sie), `own_save_ids` trägt
+    /// die früheren unbestätigten Pushs dieses Eintrags. Ein 4xx heisst „nicht
+    /// geschrieben" → die Kennung ist erledigt; Netzfehler/5xx behalten sie (der
+    /// Server hat vielleicht geschrieben). `nil` = Eintrag seit dem Lesen
+    /// ersetzt, nichts gesendet.
+    func sendOutboxEntry(_ entry: OutboxEntry, base: String) async throws
+        -> (entry: OutboxEntry, resp: PushResponse)? {
+        guard let sent = try await store.markSaveIdSent(pageId: entry.pageId, queuedAt: entry.queuedAt) else {
+            return nil
+        }
+        let req = PushRequest(html: sent.html, expected_updated_at: base,
+                              save_id: sent.saveId, own_save_ids: sent.ownSaveIdsForPush)
+        do {
+            let resp = try await reachableSend {
+                try await api.send("/content/pages/\(sent.pageId)",
+                                   method: .PUT,
+                                   body: req,
+                                   decode: PushResponse.self)
+            }
+            return (sent, resp)
+        } catch {
+            if case let AuthError.server(status, _, _) = error, (400..<500).contains(status) {
+                try? await store.forgetSaveIds([sent.saveId], pageId: sent.pageId)
+            }
+            throw error
+        }
+    }
+
+    /// 2xx eines Outbox-Pushs übernehmen — auch `save_match` `own`/`replay`: der
+    /// Server hält `entry.html` unter `resp.updated_at`, dieser und alle früheren
+    /// Pushs des Eintrags sind erledigt.
+    func confirmPush(_ entry: OutboxEntry, resp: PushResponse) async throws {
+        if let match = resp.save_match {
+            log.info("Push per Save-Kennung erkannt (\(match, privacy: .public)): \(entry.pageId, privacy: .public)")
+        }
+        // ERST Outbox atomar quittieren, DANN die Basis vorrücken — und nur,
+        // wenn wirklich quittiert wurde. Hat der Nutzer WÄHREND des PUT erneut
+        // gespeichert, trägt der neue Outbox-Eintrag eine andere Basis; die
+        // Basis dann NICHT auf diesen überholten Push-Stand vorrücken (sonst
+        // pushte der nächste Tick das neue HTML gegen eine Basis, die nicht zu
+        // seinem Inhalt passt). Datenverlust-Schutz (s. markPushed-Vertrag).
+        let quittiert = try await store.markPushed(
+            id: entry.pageId,
+            queuedAt: entry.queuedAt,
+            serverUpdatedAtMillis: ISOTime.millis(resp.updated_at) ?? entry.queuedAt)
+        // Merge-Ancestor = gerade gepushtes HTML (nun der Server-Stand).
+        try? await store.setServerBaseHtml(entry.html, id: entry.pageId)
+        stateStore.mutate {
+            $0.serverBaseISO[entry.pageId] = resp.updated_at   // exakte Server-ISO
+        }
+        // Erfolgreicher Push → eine etwaige Lock-Backoff-Frist aufheben.
+        lockedUntil[entry.pageId] = nil
+        if !quittiert {
+            // Zwischenzeitlicher Save → der neue Outbox-Eintrag bleibt und geht
+            // beim nächsten Tick raus. Die Basis trotzdem vorrücken (oben): der Server
+            // hält jetzt GENAU `entry.html` unter `resp.updated_at`, und der neue
+            // Eintrag ist eine Fortschreibung desselben Editor-Stands. Bliebe die
+            // alte Basis stehen, liefe der nächste Push in ein 409 gegen den
+            // eigenen Text und der Merge meldete eine Kollision (alle drei
+            // Fassungen des Absatzes verschieden) — Konflikt-Modal gegen sich
+            // selbst, bei „Server übernehmen" mit Verlust der jüngsten Zeichen.
+            // Die bestätigten Kennungen hat der Nachfolger geerbt → dort streichen.
+            try? await store.forgetSaveIds(entry.sentUnconfirmedIds, pageId: entry.pageId)
+            log.info("Push nicht quittiert (Save während PUT), Basis vorgerückt: \(entry.pageId, privacy: .public)")
+        }
+    }
+
     /// 409-Auflösung per 3-Wege-Block-Merge in der WebView. Kollisionsfrei →
     /// gemergtes HTML mit der neuen Server-Basis erneut pushen; echte Block-
     /// Kollision oder kein Merge möglich → Konflikt erfassen (Editor-UI/Block-Merge).
@@ -222,7 +257,9 @@ extension SyncEngine {
         let pid = entry.pageId
 
         // Kein WebView/Editor-Bundle → nicht auto-mergebar, echter Konflikt für die UI.
-        guard let editor else {
+        // Ausser es gibt eigene unbestätigte Pushs: dann erst nachsehen, ob der
+        // Server-Stand einer davon ist (Sicherheitsnetz unten, braucht keinen Editor).
+        if editor == nil && entry.sentUnconfirmedIds.isEmpty {
             await recordConflict(pageId: pid,
                                  serverUpdatedAt: c?.server_updated_at,
                                  serverEditorName: c?.server_editor_name)
@@ -246,6 +283,25 @@ extension SyncEngine {
             return
         }
         guard !isSuperseded else { return }
+
+        // Sicherheitsnetz: stammt der Server-Stand von einem eigenen Push, dessen
+        // Antwort verloren ging (und der Server hat das beim PUT nicht selbst
+        // erkannt, etwa weil der Push ohne Kennungen rausging), ist es kein
+        // Konflikt — der Eintrag schreibt genau diesen Stand fort. Ohne Merge mit
+        // dem Server-Stempel neu pushen. Nur EIGENE Kennungen zählen: ein Write
+        // eines anderen Geräts setzt `last_save_id` auf null oder eine fremde.
+        if let sid = serverPage.last_save_id, entry.sentUnconfirmedIds.contains(sid) {
+            await pushOwnContinuation(entry, serverPage: serverPage)
+            return
+        }
+
+        guard let editor else {
+            await recordConflict(pageId: pid,
+                                 serverUpdatedAt: serverPage.updated_at,
+                                 serverEditorName: c?.server_editor_name)
+            log.notice("Konflikt \(pid, privacy: .public): kein Editor zum Mergen")
+            return
+        }
 
         let serverHtml = serverPage.html ?? ""
         // Merge-Ancestor der Seite (Spalte im Store; `nil` = keiner bekannt → der
@@ -341,6 +397,23 @@ extension SyncEngine {
             }
         } catch {
             log.error("Auto-Merge-Push fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Sicherheitsnetz-Push aus `resolveConflict`: der Server hält einen eigenen
+    /// früheren Stand dieses Eintrags → den Eintrag unverändert gegen den
+    /// aktuellen Server-Stempel pushen. Scheitert das (erneutes Rennen, offline),
+    /// bleibt der Eintrag liegen; der nächste Tick entscheidet neu.
+    private func pushOwnContinuation(_ entry: OutboxEntry, serverPage: PushResponse) async {
+        let pid = entry.pageId
+        log.notice("409 gegen eigenen Push (Antwort verloren) — ohne Merge neu gepusht: \(pid, privacy: .public)")
+        do {
+            guard let pushed = try await sendOutboxEntry(entry, base: serverPage.updated_at) else { return }
+            guard !isSuperseded else { return }
+            try await confirmPush(pushed.entry, resp: pushed.resp)
+            clearConflict(pageId: pid)
+        } catch {
+            log.notice("Push nach eigenem 409 fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 }
