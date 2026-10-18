@@ -51,6 +51,12 @@ struct ConflictResolutionView: View {
             Text(subtitle)
                 .font(BrandFont.sans(11))
                 .foregroundStyle(BrandColor.muted)
+            // Die Wahl unten betrifft nur kollidierende Absätze (3-Wege-Merge,
+            // `SyncEngine.resolveConflict`) — der Diff zeigt dagegen alles.
+            Text(t("conflict.hint"))
+                .font(BrandFont.sans(11))
+                .foregroundStyle(BrandColor.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)

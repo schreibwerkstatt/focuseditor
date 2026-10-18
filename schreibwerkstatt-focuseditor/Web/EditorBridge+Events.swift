@@ -306,7 +306,11 @@ extension EditorBridge {
             throw BridgeError.mergeFailed
         }
         let count = Self.clampedCount(dict["conflictCount"])
-        return MergeOutcome(merged: merged, conflictCount: count)
+        // Tolerant: fehlende/falsch typisierte Zusatzfelder → nil/false (der
+        // Aufrufer fällt dann aufs alte Verhalten zurück).
+        return MergeOutcome(merged: merged, conflictCount: count,
+                            mergedRemote: dict["mergedRemote"] as? String,
+                            remoteUnchanged: (dict["remoteUnchanged"] as? Bool) ?? false)
     }
 }
 

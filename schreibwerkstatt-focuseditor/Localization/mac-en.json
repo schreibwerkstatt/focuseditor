@@ -134,8 +134,8 @@
   "sync.state.serverUnreachable": "Server unreachable",
   "sync.lastSynced.never": "Never",
 
-  "sync.conflict.keepLocal": "Keep mine (overwrite server)",
-  "sync.conflict.keepServer": "Take server version (discard local)",
+  "sync.conflict.keepLocal": "Keep mine where both changed (other changes are kept)",
+  "sync.conflict.keepServer": "Use server version where both changed (other changes are kept)",
   "sync.conflict.serverGone": "Section no longer exists on the server — your local version is kept.",
   "sync.error.partial.one": "{n} section could not be synced (server error) — retrying.",
   "sync.error.partial.other": "{n} sections could not be synced (server error) — retrying.",
@@ -148,8 +148,9 @@
   "conflict.column.local": "My version",
   "conflict.column.server": "Server version",
   "conflict.empty": "(empty)",
-  "conflict.keepLocal": "Keep my version",
-  "conflict.keepServer": "Use server version",
+  "conflict.keepLocal": "Where both changed: mine",
+  "conflict.keepServer": "Where both changed: server",
+  "conflict.hint": "Your choice only applies to paragraphs changed on both sides. All other changes — yours and the server’s — are kept.",
 
   "settings.spell.section": "Spell check",
   "settings.spell.deviceToggle": "Active on this device",

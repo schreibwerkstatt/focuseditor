@@ -16,6 +16,13 @@ struct MergeOutcome {
     let merged: String
     /// Anzahl echter Block-Kollisionen (>0 → Editor-Konflikt-UI nötig).
     let conflictCount: Int
+    /// Gegenstück zu `merged`: Kollisionen mit dem SERVER-Block aufgelöst, alle
+    /// übrigen Blöcke gemergt — die Wahl „Server-Stand" der manuellen Auflösung.
+    /// `nil` bei einem älteren Bridge-Stand, der das Feld noch nicht liefert.
+    var mergedRemote: String? = nil
+    /// `mergedRemote` entspricht dem Server-Stand (keine lokale Änderung ohne
+    /// Kollision) → nichts zu pushen, der Server-Stand wird schlicht übernommen.
+    var remoteUnchanged: Bool = false
 }
 
 @MainActor

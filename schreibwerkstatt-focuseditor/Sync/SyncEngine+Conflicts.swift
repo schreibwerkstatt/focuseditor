@@ -3,7 +3,8 @@
 //  schreibwerkstatt-focuseditor
 //
 //  Manuelle Auflösung durch den Nutzer: Konflikt-Ansicht (lokal ⇄ Server),
-//  „Meinen Stand behalten" / „Server-Stand übernehmen" — und derselbe
+//  „Meinen Stand behalten" / „Server-Stand übernehmen" (je nur für die
+//  kollidierenden Absätze, per 3-Wege-Block-Merge) — und der verbindliche
 //  Übernahme-Pfad für eine wiederhergestellte frühere Fassung. Ausgelagert aus
 //  SyncEngine.swift (Zeilen-Guard); der automatische 409-Merge liegt im
 //  Push-Pfad (SyncEngine+Push.swift).
@@ -44,15 +45,20 @@ extension SyncEngine {
                                 serverUpdatedAt: serverPage.updated_at)
     }
 
-    /// Manuelle Konflikt-Auflösung aus der UI. Verwirft Inhalte NUR auf
-    /// ausdrückliche Nutzer-Wahl (CLAUDE.md: kein automatisches Verwerfen).
-    ///  • `keepLocal == true`: lokaler Stand erzwingt sich gegen den Server
-    ///    (Force-Push). Wir holen den frischen Server-`updated_at` und pushen das
-    ///    lokale Outbox-HTML mit genau dieser Basis → der Server-Stand wird
-    ///    überschrieben. Damit löst sich auch ein „klebriger" Konflikt, dessen
-    ///    Auto-Merge an einer falschen Basis (z. B. nach Serverwechsel) scheiterte.
-    ///  • `keepLocal == false`: Server-Stand übernehmen, die lokale ungepushte
-    ///    Änderung verwerfen (Outbox-Eintrag droppen, offene Seite neu laden).
+    /// Manuelle Konflikt-Auflösung aus der UI. Die Wahl betrifft NUR die
+    /// kollidierenden Absätze: beide Varianten rechnen denselben 3-Wege-Block-
+    /// Merge wie der Auto-Merge im Push-Pfad, damit Absätze, die nur EINE Seite
+    /// geändert hat, nicht still verloren gehen.
+    ///  • `keepLocal == true`: Kollisionen → lokal, Rest gemergt (`merged`),
+    ///    gegen den frischen Server-`updated_at` gepusht.
+    ///  • `keepLocal == false`: Kollisionen → Server, Rest gemergt
+    ///    (`mergedRemote`). Bleibt dabei nichts Lokales übrig, wird der
+    ///    Server-Stand schlicht übernommen (`adoptServerState`).
+    /// Rückfall auf „alles oder nichts" (rohes Outbox-HTML erzwingen bzw.
+    /// Server-Stand übernehmen) nur ohne Merge-Ancestor oder wenn der Merge
+    /// wirft/in den Timeout läuft. Der Force-Push bleibt damit der Ausweg aus
+    /// einem „klebrigen" Konflikt mit falscher Basis (z. B. nach Serverwechsel).
+    /// Verworfen wird nur auf ausdrückliche Nutzer-Wahl (CLAUDE.md).
     func resolveConflict(pageId pid: String, keepLocal: Bool) async {
         guard conflicts.contains(where: { $0.pageId == pid }) else { return }
 
@@ -77,49 +83,112 @@ extension SyncEngine {
         }
 
         let entry = ((try? await store.pendingOutbox()) ?? []).first { $0.pageId == pid }
+        let serverHtml = serverPage.html ?? ""
+        let outcome: MergeOutcome? = if let entry {
+            await resolutionMerge(pageId: pid, local: entry.html, server: serverHtml)
+        } else {
+            nil
+        }
 
         if keepLocal {
             guard let entry else {
                 // Kein lokaler Outbox-Stand mehr (z. B. zwischenzeitlich quittiert)
                 // → nichts zu erzwingen, nur Basis auf den Server stellen.
-                try? await store.setServerBaseHtml(serverPage.html ?? "", id: pid)
+                try? await store.setServerBaseHtml(serverHtml, id: pid)
                 stateStore.mutate { $0.serverBaseISO[pid] = serverPage.updated_at }
                 clearConflict(pageId: pid)
                 return
             }
-            let req = PushRequest(html: entry.html, expected_updated_at: serverPage.updated_at)
-            do {
-                let resp = try await api.send("/content/pages/\(pid)",
-                                              method: .PUT,
-                                              body: req,
-                                              decode: PushResponse.self)
-                let ms = ISOTime.millis(resp.updated_at) ?? entry.queuedAt
-                // Outbox atomar quittieren; Basis nur vorrücken, wenn der Eintrag
-                // unverändert war (sonst trägt ein zwischenzeitlicher Save eine
-                // andere Basis und wird beim nächsten Tick regulär gepusht).
-                let quittiert = (try? await store.markPushed(id: pid, queuedAt: entry.queuedAt, serverUpdatedAtMillis: ms)) ?? false
-                if quittiert {
-                    try? await store.setServerBaseHtml(entry.html, id: pid)
-                    stateStore.mutate { $0.serverBaseISO[pid] = resp.updated_at }
-                }
-                clearConflict(pageId: pid)
-                lastError = nil
-                lastSyncedAt = Date()
-                log.info("Konflikt aufgelöst (lokaler Stand erzwungen): \(pid, privacy: .public)")
-            } catch {
-                // Force-Push misslungen (z. B. erneutes Rennen) → Konflikt bleibt
-                // bestehen, der Nutzer kann es erneut versuchen.
-                lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                log.error("Force-Push \(pid, privacy: .public) fehlgeschlagen: \(self.lastError ?? "?", privacy: .public)")
-            }
+            let html = outcome?.merged ?? entry.html
+            await pushResolution(pageId: pid, html: html, merged: outcome != nil,
+                                 entry: entry, serverPage: serverPage)
+        } else if let entry, let outcome, let remote = outcome.mergedRemote,
+                  !outcome.remoteUnchanged, remote != serverHtml {
+            // Lokale Änderungen ohne Kollision bleiben erhalten → pushen.
+            await pushResolution(pageId: pid, html: remote, merged: true,
+                                 entry: entry, serverPage: serverPage)
         } else {
-            // Server-Stand übernehmen, lokale Änderung verwerfen. Nutzer hat
-            // „Server übernehmen" gewählt → auch eine dirty offene Seite wird ersetzt.
+            // Server-Stand übernehmen (nichts Lokales ohne Kollision übrig, oder
+            // kein Merge möglich). Nutzer hat „Server übernehmen" gewählt → auch
+            // eine dirty offene Seite wird ersetzt.
             guard await adoptServerState(pageId: pid, serverPage: serverPage, entry: entry) else { return }
             log.info("Konflikt aufgelöst (Server-Stand übernommen): \(pid, privacy: .public)")
         }
 
         pendingCount = (try? await store.pendingOutbox().count) ?? pendingCount
+    }
+
+    /// 3-Wege-Merge für die manuelle Auflösung. `nil` = kein Merge möglich
+    /// (kein Editor, kein Merge-Ancestor, Merge wirft/Timeout) → der Aufrufer
+    /// fällt auf das alte „alles oder nichts" zurück.
+    private func resolutionMerge(pageId pid: String, local: String, server: String) async -> MergeOutcome? {
+        guard let editor,
+              let base = (try? await store.serverBaseHtml(id: pid)) ?? nil,
+              !base.isEmpty else {
+            log.notice("Konflikt-Auflösung \(pid, privacy: .public): kein Merge-Ancestor/Editor — ganze Seite")
+            return nil
+        }
+        do {
+            return try await editor.merge3(base: base, local: local, server: server)
+        } catch {
+            let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String
+                ?? error.localizedDescription
+            log.notice("Konflikt-Auflösung \(pid, privacy: .public): Merge nicht verfügbar — ganze Seite: \(detail, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Pusht den aufgelösten Stand gegen den frischen Server-`updated_at`.
+    /// `merged == false` ist der Force-Push des rohen Outbox-HTML (Rückfall):
+    /// Spiegel und Editor tragen diesen Stand schon. `merged == true`: das
+    /// gepushte HTML enthält auch Server-Absätze → in den Spiegel schreiben und
+    /// die offene Seite neu laden.
+    private func pushResolution(pageId pid: String, html: String, merged: Bool,
+                                entry: OutboxEntry, serverPage: PushResponse) async {
+        let req = PushRequest(html: html, expected_updated_at: serverPage.updated_at)
+        do {
+            let resp = try await api.send("/content/pages/\(pid)",
+                                          method: .PUT,
+                                          body: req,
+                                          decode: PushResponse.self)
+            let ms = ISOTime.millis(resp.updated_at) ?? entry.queuedAt
+            // Outbox atomar quittieren; Basis nur vorrücken, wenn der Eintrag
+            // unverändert war (sonst trägt ein zwischenzeitlicher Save eine
+            // andere Basis und wird beim nächsten Tick regulär gepusht).
+            let quittiert: Bool
+            if merged {
+                quittiert = (try? await store.applyMergedPush(id: pid, html: html, queuedAt: entry.queuedAt,
+                                                              serverUpdatedAtMillis: ms)) ?? false
+            } else {
+                quittiert = (try? await store.markPushed(id: pid, queuedAt: entry.queuedAt,
+                                                         serverUpdatedAtMillis: ms)) ?? false
+            }
+            if quittiert {
+                try? await store.setServerBaseHtml(html, id: pid)
+                stateStore.mutate { $0.serverBaseISO[pid] = resp.updated_at }
+                if merged {
+                    // Der Editor trägt noch `entry.html`. Lehnt er den Reload ab
+                    // (inzwischen getippt) oder liegt schon ein neuer Save vor,
+                    // wird `entry.html` der Ancestor und die ISO-Basis bleibt alt
+                    // → der nächste Push merged nur die jüngsten Zeichen ein.
+                    let fallback = BaseSnapshot(iso: serverPage.updated_at, ancestor: entry.html)
+                    await reloadOpenPageOrRevertBase(pid, html: html, ms: ms, previous: fallback)
+                }
+            } else if merged {
+                // Save während des PUT: der neue Eintrag schreibt `entry.html`
+                // fort (wie im Auto-Merge-Pfad) → Ancestor, ISO-Basis bleibt alt.
+                try? await store.setServerBaseHtml(entry.html, id: pid)
+            }
+            clearConflict(pageId: pid)
+            lastError = nil
+            lastSyncedAt = Date()
+            log.info("Konflikt aufgelöst (\(merged ? "gemergt" : "lokaler Stand erzwungen", privacy: .public)): \(pid, privacy: .public)")
+        } catch {
+            // Push misslungen (z. B. erneutes Rennen) → Konflikt bleibt
+            // bestehen, der Nutzer kann es erneut versuchen.
+            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            log.error("Konflikt-Push \(pid, privacy: .public) fehlgeschlagen: \(self.lastError ?? "?", privacy: .public)")
+        }
     }
 
     /// Nach einer serverseitig wiederhergestellten früheren Fassung: den

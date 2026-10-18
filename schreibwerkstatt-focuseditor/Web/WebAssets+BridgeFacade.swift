@@ -143,7 +143,21 @@ extension WebAssets {
           const url = new URL('js/editor/shared/block-merge.js', document.baseURI).href;
           const m = await import(url);
           const res = m.mergeBlocks(baseHtml || '', localHtml || '', serverHtml || '');
-          return { merged: m.mergedToHtml(res.merged), conflictCount: res.conflicts.length };
+          // Gegenstück für „Server-Stand" in der manuellen Konflikt-Auflösung:
+          // jede Kollision → Server, alle übrigen Blöcke bleiben gemergt (die
+          // lokalen Änderungen ohne Kollision gehen also nicht verloren).
+          const decisions = {};
+          res.conflicts.forEach((c) => { decisions[c.bid] = 'remote'; });
+          const mergedRemote = m.buildResolvedHtml(res.merged, decisions);
+          // Gleich dem Server-Stand (in Block-Normalform verglichen, der Parser
+          // wirft Whitespace zwischen Blöcken weg)? Dann gibt es nichts zu pushen.
+          const serverNorm = m.parseBlocks(serverHtml || '').map((b) => b.html).join('');
+          return {
+            merged: m.mergedToHtml(res.merged),
+            conflictCount: res.conflicts.length,
+            mergedRemote,
+            remoteUnchanged: mergedRemote === serverNorm,
+          };
         },
 
         // Offenen Draft sofort persistieren (z. B. bei ⌘S). Der Editor-Autosave

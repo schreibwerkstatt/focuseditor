@@ -21,7 +21,7 @@ import XCTest
 // MARK: - HTTP-Stub (URLProtocol)
 
 /// Eine gestubbte Antwort: Status + JSON-Body.
-private struct Stub {
+struct Stub {
     let status: Int
     let json: String
 }
@@ -32,9 +32,38 @@ private struct Stub {
 /// wiederholt (so braucht ein wiederholt gepollter Endpoint nur einen Stub).
 /// Treibt den projektweit geteilten `MockURLProtocol` (Definition in
 /// APIClientTests) über dessen `handler`-Closure.
-private final class StubRouter: @unchecked Sendable {
+final class StubRouter: @unchecked Sendable {
     private var routes: [String: [Stub]] = [:]
+    /// Request-Bodies je Route in Aufruf-Reihenfolge (für „was wurde gepusht?").
+    private var bodies: [String: [Data]] = [:]
     private let lock = NSLock()
+
+    /// Die bisher an „METHOD path" gesendeten Bodies.
+    func sentBodies(_ method: String, _ path: String) -> [Data] {
+        lock.lock(); defer { lock.unlock() }
+        return bodies["\(method) \(path)"] ?? []
+    }
+
+    private func record(method: String, path: String, body: Data?) {
+        guard let body else { return }
+        lock.lock(); defer { lock.unlock() }
+        bodies["\(method) \(path)", default: []].append(body)
+    }
+
+    /// URLProtocol sieht den Body meist nur als Stream (`httpBody` ist nil).
+    private static func body(of request: URLRequest) -> Data? {
+        if let data = request.httpBody { return data }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open(); defer { stream.close() }
+        var data = Data()
+        var buf = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buf, maxLength: buf.count)
+            if n <= 0 { break }
+            data.append(buf, count: n)
+        }
+        return data
+    }
 
     func on(_ method: String, _ path: String, _ stubs: [Stub]) {
         lock.lock(); defer { lock.unlock() }
@@ -55,6 +84,7 @@ private final class StubRouter: @unchecked Sendable {
         MockURLProtocol.handler = { [weak self] request in
             let method = request.httpMethod ?? "GET"
             let path = request.url?.path ?? ""
+            self?.record(method: method, path: path, body: StubRouter.body(of: request))
             guard let stub = self?.next(method: method, path: path), let url = request.url else {
                 throw URLError(.unsupportedURL)
             }
@@ -69,7 +99,7 @@ private final class StubRouter: @unchecked Sendable {
 // MARK: - In-Memory-Fakes
 
 @MainActor
-private final class FakeStore: LocalStore {
+final class FakeStore: LocalStore {
     var pages: [String: StoredPage] = [:]
     var outbox: [String: OutboxEntry] = [:]
     /// Merge-Ancestor je Seite (früher `SyncState.serverBaseHtml`).
@@ -164,7 +194,7 @@ private final class FakeStore: LocalStore {
 }
 
 @MainActor
-private final class FakeEditor: EditorCoordinating {
+final class FakeEditor: EditorCoordinating {
     var openPageId: String?
     var dirtyPages: Set<String> = []
     var mergeResult: MergeOutcome?

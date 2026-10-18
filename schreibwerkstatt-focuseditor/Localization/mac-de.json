@@ -134,8 +134,8 @@
   "sync.state.serverUnreachable": "Server nicht erreichbar",
   "sync.lastSynced.never": "Noch nie",
 
-  "sync.conflict.keepLocal": "Meinen Stand behalten (Server überschreiben)",
-  "sync.conflict.keepServer": "Server-Stand übernehmen (lokal verwerfen)",
+  "sync.conflict.keepLocal": "Bei Kollisionen meinen Stand behalten (übrige Änderungen bleiben)",
+  "sync.conflict.keepServer": "Bei Kollisionen Server-Stand übernehmen (übrige Änderungen bleiben)",
   "sync.conflict.serverGone": "Abschnitt ist serverseitig nicht mehr vorhanden — lokaler Stand bleibt erhalten.",
   "sync.error.partial.one": "{n} Abschnitt konnte nicht synchronisiert werden (Serverfehler) — wird erneut versucht.",
   "sync.error.partial.other": "{n} Abschnitte konnten nicht synchronisiert werden (Serverfehler) — wird erneut versucht.",
@@ -148,8 +148,9 @@
   "conflict.column.local": "Mein Stand",
   "conflict.column.server": "Server-Stand",
   "conflict.empty": "(leer)",
-  "conflict.keepLocal": "Meinen Stand behalten",
-  "conflict.keepServer": "Server-Stand übernehmen",
+  "conflict.keepLocal": "Bei Kollisionen: mein Stand",
+  "conflict.keepServer": "Bei Kollisionen: Server-Stand",
+  "conflict.hint": "Die Wahl gilt nur für Absätze, die auf beiden Seiten geändert wurden. Alle übrigen Änderungen – deine und die vom Server – bleiben erhalten.",
 
   "settings.spell.section": "Rechtschreibprüfung",
   "settings.spell.deviceToggle": "Auf diesem Gerät aktiv",
