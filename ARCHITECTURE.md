@@ -138,8 +138,8 @@ Die Navigation-Policy erlaubt **nur** `swk-app:`, `file:`, `about:` und schemenl
 [EditorBundleStore.swift](schreibwerkstatt-focuseditor/Web/EditorBundleStore.swift) — `ObservableObject`, `@Published var state: BundleState` (`.idle/.refreshing/.ready/.failed`).
 
 - `ensureReady()`: mit Cache → sofort `.ready` + stiller Hintergrund-Refresh; ohne Cache → blockierender Erst-Download.
-- `refresh(silent:)`: `api.getRaw(...)` mit `If-None-Match`-ETag → **304** (`regenerateIndexHTMLFromCache`) oder neues ZIP (`installBundle`).
-- `installBundle`: entpackt via `MiniZip.entries`, schreibt in ein Staging-Verzeichnis (`web-cache.staging-<UUID>`, mit Path-Traversal-Guard), generiert `index.html` aus `WebAssets.indexHTML(cssFiles:sourceCommit:)` + Manifest, dann **atomarer Swap** über `FileManager.replaceItemAt`.
+- `refresh(silent:)`: `api.getRaw(...)` mit `If-None-Match`-ETag und `X-Editor-Api` (aus `supportedEditorApiMajors`, der EINEN Stelle für die Majors, die die Schale kann) → **304** (`regenerateIndexHTMLFromCache`) oder neues ZIP (`installBundle`). `409 EDITOR_API_UNSUPPORTED` → gecachtes Bundle bleibt (wie bei einem Netzfehler), `appUpdateRequired`/`showsAppUpdateNotice` treiben den Hinweis „App-Update nötig" (Banner über der Schreibfläche + Einstellungen ▸ Konto); ohne Cache `.failed`. Ein 200/304 setzt den Hinweis zurück.
+- `installBundle`: entpackt via `MiniZip.entries`, schreibt in ein Staging-Verzeichnis (`web-cache.staging-<UUID>`, mit Path-Traversal-Guard), prüft das Manifest-`editorApi` gegen `supportedEditorApiMajors` (fremder Major → nicht installieren, wie 409; ohne Feld gilt 1), generiert `index.html` aus `WebAssets.indexHTML(cssFiles:sourceCommit:)` + Manifest, dann **atomarer Swap** über `FileManager.replaceItemAt`.
 - Refresh greift bewusst erst beim **nächsten** Start (kein Hot-Swap mitten im Schreiben).
 
 Cache-Ort: `~/Library/Application Support/schreibwerkstatt-focuseditor/web-cache/` + `web-cache.meta.json` (ETag + sourceCommit).
@@ -260,7 +260,7 @@ Cursor-Stagnation und leere Antworten brechen die Schleife (Endlos-Schutz).
 Alle Dateien unter [Auth/](schreibwerkstatt-focuseditor/Auth/).
 
 - [AuthStore.swift](schreibwerkstatt-focuseditor/Auth/AuthStore.swift) — `@MainActor`, State `.unknown/.signedOut/.validating/.signedIn`. `bootstrap()` validiert ein vorhandenes Token gegen `GET /me/device-tokens` (funktioniert mit Device-Token; nur das Ausstellen ist serverseitig gesperrt). Offline-Fehler → optimistisch `.signedIn` (Inhalte nie verwerfen). `signIn(...)` normalisiert URL + Token, probt, speichert ins Keychain. 401 zur Laufzeit → `handleUnauthorized` (Token löschen, Re-Login).
-- [APIClient.swift](schreibwerkstatt-focuseditor/Auth/APIClient.swift) — HTTP-Client. Setzt `Authorization: Bearer swd_…` aus dem `tokenProvider` (Keychain) auf jeden Request. `send`/`sendVoid` (JSON), `postExpectingJSON` (4xx fachlich durchreichen — z.B. LanguageTool-404), `getRaw` (Binär/ZIP, behandelt **304 nicht als Fehler**). 401 → `onUnauthorized`-Callback + `AuthError.unauthorized`. Timeout 30 s, `waitsForConnectivity = false`.
+- [APIClient.swift](schreibwerkstatt-focuseditor/Auth/APIClient.swift) — HTTP-Client. Setzt `Authorization: Bearer swd_…` aus dem `tokenProvider` (Keychain) auf jeden Request. `send`/`sendVoid` (JSON), `postExpectingJSON` (4xx fachlich durchreichen — z.B. LanguageTool-404), `getRaw` (Binär/ZIP, behandelt **304 nicht als Fehler**, nimmt Zusatz-Header). 401 → `onUnauthorized`-Callback + `AuthError.unauthorized`. Timeout 30 s, `waitsForConnectivity = false`. `makeDecoder()`/`makeEncoder()` sind das eine JSON-Setup aller Server-Bodies — auch wo ein Aufrufer einen Fehler-Body selbst liest (409/423, Konto-Löschung) und in den `ContractFixtureTests`.
 - [Keychain.swift](schreibwerkstatt-focuseditor/Auth/Keychain.swift) — `SecItem`-Wrapper, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (nicht in Backups/iCloud). Token **nur** hier, nie in UserDefaults/Logs/Bridge.
 - [DeviceToken.swift](schreibwerkstatt-focuseditor/Auth/DeviceToken.swift) — Format `swd_` + 64 Hex (lowercase), `isValidFormat`/`normalize` (trimmt Copy-Paste-Reste). DTOs der Token-Liste (ohne Klartext).
 - [ServerConfig.swift](schreibwerkstatt-focuseditor/Auth/ServerConfig.swift) — Base-URL in UserDefaults (`server.baseURL`), Default `http://127.0.0.1:3737` (IPv4-Zwang, da Dev-Server nur IPv4 bindet). `normalizedURL` trimmt, prüft Schema/Host, erzwingt IPv4 für `localhost`.
@@ -316,7 +316,7 @@ Plus [Theme/BrandColor.swift](schreibwerkstatt-focuseditor/Theme/BrandColor.swif
 ## 11. Drei durchgehende Datenflüsse
 
 **A — OTA-Bundle laden:**
-`EditorBundleStore.refresh` → `APIClient.getRaw(If-None-Match)` → 304 *oder* ZIP → `MiniZip.entries` → Staging + `WebAssets.indexHTML` → atomarer Swap → `AppSchemeHandler` liefert `swk-app://local/*` → WebView mountet `focus/standalone.js`.
+`EditorBundleStore.refresh` → `APIClient.getRaw(If-None-Match, X-Editor-Api)` → 304 *oder* 409 (Cache behalten, Update-Hinweis) *oder* ZIP → `MiniZip.entries` → Staging + `WebAssets.indexHTML` → atomarer Swap → `AppSchemeHandler` liefert `swk-app://local/*` → WebView mountet `focus/standalone.js`.
 
 **B — Eine Seite schreiben (local-first):**
 Editor `input` → JS `save` → `EditorBridge` → `LocalStore.save` (Seite **+ Outbox**) → später Poll-Tick → `SyncEngine.pushOutbox` → `PUT /pages/:id` mit `expected_updated_at` → 200 → `markPushed` + neue Basis. UI wartet **nie** aufs Netz.
@@ -353,6 +353,8 @@ einem sauberen Abbruch, bei dem nichts passiert ist.
 - **Neuer Ausstiegspfad aus dem Editor** (Fenster, Szene, Beenden, Modus-Wechsel) → an einen Draft-Flush hängen, sonst kostet er bis zu 5 s Text (s. CLAUDE.md, harte Regeln).
 - **Neuer nutzersichtbarer String** → `t("key")` + **beide** Kataloge; `LocalizationCatalogTests` hält das fest.
 - **Neuer JS-Glue im Boot** → `WebAssetsSyntaxTests` parst ihn beim nächsten Testlauf mit (`node --check`); Verträge zusätzlich als `contains`-Test in `WebAssetsTests`.
+- **Neues DTO / neues Server-Feld** → zuerst `scripts/sync-contract.sh`, dann die Fixture in `ContractFixtureTests.checks` dem DTO zuordnen (mit `APIClient.makeDecoder()`); Android-only-Fixtures in `ignored` mit Grund. Feature-Erkennung über `/config` → `clientContract.api >= n` (`ConfigDTO.clientContract`).
+- **Neuer Zugriff aufs Bundle** (Handle, Host, Export, Klasse) → nur, was `contract/editor-api.d.ts` zusagt; keine `_`-Interna. Fehlt etwas, bekommt das Handle im Hauptrepo eine öffentliche Funktion.
 - **Neuer Netz-Store** → über `MockURLProtocol` testbar halten: Session in den `APIClient` injizierbar lassen, Timing/Verzeichnisse nicht hart verdrahten (Vorbild `LektoratJobStore(pollInterval:maxPolls:)`, `EditorBundleStore(baseDirectory:)`).
 
 Harte Regeln (kein Fork, WebView nur lokal, local-first, Token nur Keychain, Konflikte über Block-Merge, Datenverlust-Schutz) stehen verbindlich in [CLAUDE.md](CLAUDE.md).
