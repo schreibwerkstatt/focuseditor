@@ -1376,23 +1376,6 @@
           "params"
         ]
       },
-      "MacclientI18n": {
-        "type": "object",
-        "properties": {
-          "de": {
-            "type": "object",
-            "x-volatile": true
-          },
-          "en": {
-            "type": "object",
-            "x-volatile": true
-          }
-        },
-        "required": [
-          "de",
-          "en"
-        ]
-      },
       "LtCheckRequest": {
         "type": "object",
         "properties": {
@@ -2379,49 +2362,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EditorApiUnsupported"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/content/macclient-i18n.json": {
-      "get": {
-        "x-clients": [
-          "macos"
-        ],
-        "summary": "OTA-Overrides der macOS-UI-Strings",
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MacclientI18n"
-                }
-              }
-            }
-          },
-          "304": {
-            "description": "Unverändert."
-          },
-          "401": {
-            "description": "Token fehlt, unbekannt, widerrufen oder abgelaufen; Konto gesperrt/gelöscht. error_code: NOT_LOGGED_IN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Scope oder Buchrolle reicht nicht. error_code: DEVICE_SCOPE_FORBIDDEN | NO_BOOK_ACCESS | INSUFFICIENT_ROLE",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
                 }
               }
             }

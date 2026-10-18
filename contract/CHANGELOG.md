@@ -12,6 +12,10 @@ Erster festgeschriebener Stand. Er beschreibt, was macOS (3.27) und Android (`65
 
 **Clients dürfen:** `base_html` beim Push mitschicken (Android: damit gibt es Auto-Merge ohne eigene Merge-Logik), `X-Editor-Api: 1` senden und `409 EDITOR_API_UNSUPPORTED` als «gecachtes Bundle behalten, Update-Hinweis» behandeln.
 
+**Entfernt:** `GET /content/macclient-i18n.json` (OTA-Override der macOS-UI-Strings). Die Strings der Mac-Schale kommen nur noch aus den gebündelten Katalogen der App. Ältere Macs bekommen `404`, das sie schon immer still als «kein Override» behandeln; ihr zuletzt gecachter Override bleibt bis zum App-Update liegen.
+
+**macOS muss:** `I18nBundleStore` und den OTA-Zweig im `L10nStore` streichen und den Cache `i18n-cache.json` (+ `.meta.json`) beim Start löschen.
+
 **Clients sollen:** Ihre Decoding-Tests auf `contract/fixtures/` umstellen (`scripts/sync-contract.sh` im Client-Repo).
 
-**macOS soll:** Den Fallback auf `controller._focusUpdateActive` in `applyGranularity` streichen; `setGranularity` liefert jedes Bundle seit dem Standalone-Hook. Danach `npm run contract:surface`, und der Eintrag fällt aus der Schuldenliste in `tests/unit/editor-surface.test.js`.
+**macOS soll:** Den Fallback auf `controller._focusUpdateActive` in `applyGranularity` streichen; `setGranularity` liefert jedes Bundle seit dem Standalone-Hook. Aus `editor-surface.json` und der Schuldenliste in `tests/unit/editor-surface.test.js` fällt der Eintrag erst mit `npm run contract:surface -- --prune`, wenn der Admin-Tab «Geräte» keinen Mac unter dieser Version mehr zeigt: Mac 3.27 und älter greifen weiter darauf zu.

@@ -2,11 +2,10 @@
 //  LocalizationCatalogTests.swift
 //  schreibwerkstatt-focuseditorTests
 //
-//  Guard für die zwei gebündelten Kataloge (mac-de.json / mac-en.json). Sie
-//  sind der Offline-Pflicht-Fallback — der Server-Override (I18nBundleStore)
-//  greift erst beim nächsten Start und darf nie Voraussetzung sein. Ein Key,
-//  den nur eine Sprache kennt, fällt darum nicht auf: die Fallback-Kette
-//  (`OTA[locale] → bundled[locale] → bundled["de"] → key`) liefert im
+//  Guard für die zwei gebündelten Kataloge (mac-de.json / mac-en.json) — die
+//  einzige Quelle der Schalen-Strings. Ein Key, den nur eine Sprache kennt,
+//  fällt sonst nicht auf: die Fallback-Kette
+//  (`bundled[locale] → bundled["de"] → key`) liefert im
 //  englischen Build still den deutschen Text — oder, fehlt er ganz, den nackten
 //  Key. Beides sieht man nur, wenn man die App in der Sprache benutzt.
 //

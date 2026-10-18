@@ -7,16 +7,11 @@
 //  und existieren NICHT in der Web-i18n — sie haben einen eigenen Namespace
 //  `macclient.*`.
 //
-//  Quelle der Strings (Fallback-Kette, gespiegelt aus der Web-`i18n.js`):
-//    OTA[locale][key]  →  bundled[locale][key]  →  bundled["de"][key]  →  key
-//
-//   • bundled — im App-Bundle mitgelieferte `mac-de.json`/`mac-en.json`. Garantie
-//     für Offline-/Erststart (CLAUDE.md Offline-Kern: kein Netz beim ersten Start
-//     der UI nötig).
-//   • OTA      — optionaler Server-Override (I18nBundleStore zieht/cacht ihn,
-//     ETag-getrieben). Greift wie das Editor-Bundle erst beim NÄCHSTEN Start.
-//     Solange kein Override da ist (oder Server `404`), zählt der gebündelte
-//     Stand — stilles Degradieren, kein Fehler.
+//  Quelle der Strings sind ausschliesslich die im App-Bundle mitgelieferten
+//  `mac-de.json`/`mac-en.json` (Fallback-Kette, gespiegelt aus der Web-`i18n.js`):
+//    bundled[locale][key]  →  bundled["de"][key]  →  key
+//  Der Server liefert keine Strings für die Schale; ein neuer Text kommt mit
+//  dem nächsten App-Release.
 //
 //  HARTE REGEL: Strings werden NIE direkt im Code dupliziert — immer `t(key)`.
 //  Plural über `tn(count, baseKey)` (wählt `<key>.one` / `<key>.other`).
@@ -40,23 +35,11 @@ nonisolated final class L10nStore: @unchecked Sendable {
     private let lock = NSLock()
     /// locale → (key → value)
     private var bundled: [String: [String: String]] = [:]
-    private var ota: [String: [String: String]] = [:]
     private var locale: String = "de"
-
-    /// Pfad des gecachten OTA-Overrides (vom I18nBundleStore geschrieben).
-    static var otaCacheURL: URL {
-        let base = (try? FileManager.default.url(for: .applicationSupportDirectory,
-                                                 in: .userDomainMask,
-                                                 appropriateFor: nil, create: true))
-            ?? FileManager.default.temporaryDirectory
-        return base
-            .appendingPathComponent("schreibwerkstatt-focuseditor", isDirectory: true)
-            .appendingPathComponent("i18n-cache.json")
-    }
 
     private init() {
         loadBundled()
-        loadOTAFromCache()
+        Self.removeLegacyOTACache()
     }
 
     // MARK: Laden
@@ -72,13 +55,18 @@ nonisolated final class L10nStore: @unchecked Sendable {
         lock.lock(); bundled = loaded; lock.unlock()
     }
 
-    /// Lädt den gecachten OTA-Override (falls vorhanden). Format:
-    /// `{ "de": { key: value, … }, "en": { … } }`.
-    func loadOTAFromCache() {
-        guard let data = try? Data(contentsOf: Self.otaCacheURL),
-              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: [String: String]]
+    /// Räumt den String-Override weg, den ältere Versionen vom Server gezogen
+    /// und im App-Support gecacht haben (`i18n-cache.json` + ETag-Sidecar).
+    /// Er wird nicht mehr gelesen; liegen bleiben soll er trotzdem nicht.
+    private static func removeLegacyOTACache() {
+        guard let base = try? FileManager.default.url(for: .applicationSupportDirectory,
+                                                      in: .userDomainMask,
+                                                      appropriateFor: nil, create: false)
         else { return }
-        lock.lock(); ota = parsed; lock.unlock()
+        let dir = base.appendingPathComponent("schreibwerkstatt-focuseditor", isDirectory: true)
+        for name in ["i18n-cache.json", "i18n-cache.meta.json"] {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+        }
     }
 
     private static func readCatalog(bundleResource name: String) -> [String: String]? {
@@ -105,8 +93,7 @@ nonisolated final class L10nStore: @unchecked Sendable {
 
     func resolve(_ key: String) -> String {
         lock.lock(); defer { lock.unlock() }
-        return ota[locale]?[key]
-            ?? bundled[locale]?[key]
+        return bundled[locale]?[key]
             ?? bundled["de"]?[key]
             ?? key
     }

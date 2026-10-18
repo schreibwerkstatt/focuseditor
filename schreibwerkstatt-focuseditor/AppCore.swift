@@ -27,9 +27,6 @@ final class AppCore: ObservableObject {
     let library: LibraryStore
     /// OTA-Bundle des Focus-Editors (lädt/cacht die Editor-Assets vom Server).
     let editorBundle: EditorBundleStore
-    /// OTA-Override der Oberflächen-Strings (macclient.*); gebündelte Kataloge
-    /// bleiben der Offline-Fallback.
-    let i18n: I18nBundleStore
     /// Misst die im Editor verbrachte Zeit und meldet sie an den Server
     /// (`POST /history/writing-time`) — das native Pendant zum Schreibzeit-
     /// Heartbeat der Web-Plattform. Scene-Phase über `setActive(_:)`.
@@ -88,7 +85,6 @@ final class AppCore: ObservableObject {
         let library = LibraryStore(content: content, store: store, bridge: bridge)
         self.library = library
         self.editorBundle = EditorBundleStore(api: auth.api)
-        self.i18n = I18nBundleStore(api: auth.api)
         let writingTime = WritingTimeTracker(api: auth.api,
                                              isSignedIn: { auth.state == .signedIn })
         self.writingTime = writingTime
@@ -174,8 +170,5 @@ final class AppCore: ObservableObject {
     func bootstrap() async {
         await auth.bootstrap()
         sync.start()
-        // String-Override still im Hintergrund ziehen (greift beim nächsten
-        // Start; gebündelte Kataloge bleiben der Offline-Fallback).
-        Task { await i18n.refresh() }
     }
 }

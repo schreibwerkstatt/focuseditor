@@ -211,12 +211,6 @@ final class ContractFixtureTests: XCTestCase {
                 let markdown = try self.decode(String.self, f)
                 XCTAssertTrue(markdown.hasPrefix("# "))
             },
-            // OTA-Override der UI-Strings: I18nBundleStore cacht nur, was als
-            // `[locale: [key: text]]` lesbar ist.
-            "macclient-i18n": { f in
-                let parsed = try JSONSerialization.jsonObject(with: self.responseData(f)) as? [String: [String: String]]
-                XCTAssertNotNil(parsed)
-            },
 
             // ── Editor-Bundle (OTA) ─────────────────────────────────────────
             "editor-bundle": { f in
