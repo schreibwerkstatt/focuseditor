@@ -25,9 +25,9 @@ Altersfreigabe 4+, Inhalte Dritter deklariert (`USES_THIRD_PARTY_CONTENT`).
 | 3.20 | 42 | `READY_FOR_SALE` — die Erstveröffentlichung, nach drei Review-Runden |
 | 3.21 | 43 | `READY_FOR_SALE` |
 | 3.22 | 44 | `READY_FOR_SALE` |
-| **3.23** | 45 | `READY_FOR_SALE` — zuletzt veröffentlicht |
-| 3.24 | 46 (hochgeladen 2026-10-04) | nie eingereicht — von 3.25 abgelöst |
-| 3.25 | 47 (hochgeladen 2026-10-05) | nie eingereicht — von 3.26 abgelöst |
+| 3.23 | 45 | `READY_FOR_SALE` |
+| 3.24 | 46 | `READY_FOR_SALE` |
+| **3.25** | 47 | `READY_FOR_SALE` — zuletzt veröffentlicht (Stand per API geprüft 2026-10-18) |
 | **3.26** | 48 (hochgeladen 2026-10-18) | Version im Browser anzulegen, Build zuzuordnen, „Neue Funktionen“ aus [whats-new.md](whats-new.md) |
 
 Mit dem vorhandenen API-Schlüssel (Rolle *Developer*) **lesbar**: Versionen,
