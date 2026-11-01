@@ -34,6 +34,7 @@
 		7E0000000000000000000058 /* ContentAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000048 /* ContentAPI.swift */; };
 		7E0000000000000000000059 /* Reachability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000049 /* Reachability.swift */; };
 		7E000000000000000000005A /* SyncPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E000000000000000000004A /* SyncPreferences.swift */; };
+		7E0000000000000000000231 /* SyncCadence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000230 /* SyncCadence.swift */; };
 		7E000000000000000000005B /* EditorBridge+Proxies.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E000000000000000000004B /* EditorBridge+Proxies.swift */; };
 		7E0000000000000000000090 /* EditorBridge+Ops.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000080 /* EditorBridge+Ops.swift */; };
 		7E0000000000000000000091 /* EditorBridge+Events.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0000000000000000000081 /* EditorBridge+Events.swift */; };
@@ -106,6 +107,7 @@
 		7E0000000000000000000048 /* ContentAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ContentAPI.swift; path = "schreibwerkstatt-focuseditor/Content/ContentAPI.swift"; sourceTree = SOURCE_ROOT; };
 		7E0000000000000000000049 /* Reachability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Reachability.swift; path = "schreibwerkstatt-focuseditor/Sync/Reachability.swift"; sourceTree = SOURCE_ROOT; };
 		7E000000000000000000004A /* SyncPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncPreferences.swift; path = "schreibwerkstatt-focuseditor/Sync/SyncPreferences.swift"; sourceTree = SOURCE_ROOT; };
+		7E0000000000000000000230 /* SyncCadence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncCadence.swift; path = "schreibwerkstatt-focuseditor/Sync/SyncCadence.swift"; sourceTree = SOURCE_ROOT; };
 		7E000000000000000000004B /* EditorBridge+Proxies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "EditorBridge+Proxies.swift"; path = "schreibwerkstatt-focuseditor/Web/EditorBridge+Proxies.swift"; sourceTree = SOURCE_ROOT; };
 		7E0000000000000000000080 /* EditorBridge+Ops.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "EditorBridge+Ops.swift"; path = "schreibwerkstatt-focuseditor/Web/EditorBridge+Ops.swift"; sourceTree = SOURCE_ROOT; };
 		7E0000000000000000000081 /* EditorBridge+Events.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "EditorBridge+Events.swift"; path = "schreibwerkstatt-focuseditor/Web/EditorBridge+Events.swift"; sourceTree = SOURCE_ROOT; };
@@ -217,6 +219,7 @@
 				7E0000000000000000000048 /* ContentAPI.swift */,
 				7E0000000000000000000049 /* Reachability.swift */,
 				7E000000000000000000004A /* SyncPreferences.swift */,
+				7E0000000000000000000230 /* SyncCadence.swift */,
 				7E0000000000000000000060 /* WritingTimeTracker.swift */,
 				7E0000000000000000000061 /* LibraryStore.swift */,
 				7E0000000000000000000063 /* PagePickerModel.swift */,
@@ -478,6 +481,7 @@
 				7E0000000000000000000058 /* ContentAPI.swift in Sources */,
 				7E0000000000000000000059 /* Reachability.swift in Sources */,
 				7E000000000000000000005A /* SyncPreferences.swift in Sources */,
+				7E0000000000000000000231 /* SyncCadence.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

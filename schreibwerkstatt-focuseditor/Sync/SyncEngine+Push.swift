@@ -345,20 +345,7 @@ extension SyncEngine {
             await adoptMergedPush(entry: entry, mergedHtml: outcome.merged, resp: resp)
             log.info("Auto-Merge gepusht: \(pid, privacy: .public)")
         } catch let AuthError.server(status, _, _) where status == 409 {
-            // Erneutes Rennen. Begrenzt oft still neu versuchen; danach als
-            // SICHTBAREN Konflikt erfassen, statt jeden Tick einen vollen
-            // Merge-Roundtrip zu fahren, der nie konvergiert (Live-Lock-Schutz).
-            let n = (autoMergeRe409[pid] ?? 0) + 1
-            autoMergeRe409[pid] = n
-            if n >= maxAutoMergeRetries {
-                autoMergeRe409[pid] = nil
-                await recordConflict(pageId: pid,
-                                     serverUpdatedAt: serverPage.updated_at,
-                                     serverEditorName: c?.server_editor_name)
-                log.notice("Auto-Merge \(pid, privacy: .public): \(n, privacy: .public)× erneut 409 — als sichtbaren Konflikt erfasst")
-            } else {
-                log.notice("Auto-Merge verlor das Rennen (erneut 409, \(n, privacy: .public)/\(self.maxAutoMergeRetries, privacy: .public)): \(pid, privacy: .public)")
-            }
+            await noteAutoMergeRace(pageId: pid, serverPage: serverPage, conflict: c)
         } catch {
             log.error("Auto-Merge-Push fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
@@ -393,13 +380,41 @@ extension SyncEngine {
             guard !isSuperseded else { return }
             await adoptMergedPush(entry: entry, mergedHtml: resp.html ?? entry.html, resp: resp)
             log.info("Server-Merge übernommen (\(reason, privacy: .public)): \(pid, privacy: .public)")
-        } catch let AuthError.server(status, _, _) where status == 409 {
+        } catch let AuthError.server(status, _, body) where status == 409 {
+            // Nur `merge_conflicts` ist eine echte Block-Kollision. Ein 409 ohne
+            // ist ein verlorenes Rennen (ein anderes Gerät schrieb dazwischen) —
+            // wie im WebView-Pfad still neu versuchen statt sofort das Sheet.
+            let body409 = body.flatMap { try? APIClient.makeDecoder().decode(ConflictBody.self, from: $0) }
+            if body409?.merge_conflicts?.isEmpty == false {
+                autoMergeRe409[pid] = nil
+                await recordConflict(pageId: pid,
+                                     serverUpdatedAt: body409?.server_updated_at ?? serverPage.updated_at,
+                                     serverEditorName: body409?.server_editor_name ?? c?.server_editor_name)
+                log.notice("Server-Merge \(pid, privacy: .public): Block-Kollision — Konflikt offen")
+            } else {
+                await noteAutoMergeRace(pageId: pid, serverPage: serverPage, conflict: c)
+            }
+        } catch {
+            log.error("Server-Merge-Push fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Merge-Push verlor das Rennen (erneut 409 ohne Block-Kollision). Begrenzt
+    /// oft still neu versuchen; danach als SICHTBAREN Konflikt erfassen, statt
+    /// jeden Tick einen vollen Merge-Roundtrip zu fahren, der nie konvergiert
+    /// (Live-Lock-Schutz). Geteilt von WebView-Merge und Server-Merge-Rückfall.
+    private func noteAutoMergeRace(pageId pid: String, serverPage: PushResponse,
+                                   conflict c: ConflictBody?) async {
+        let n = (autoMergeRe409[pid] ?? 0) + 1
+        autoMergeRe409[pid] = n
+        if n >= maxAutoMergeRetries {
+            autoMergeRe409[pid] = nil
             await recordConflict(pageId: pid,
                                  serverUpdatedAt: serverPage.updated_at,
                                  serverEditorName: c?.server_editor_name)
-            log.notice("Server-Merge \(pid, privacy: .public): Block-Kollision oder erneutes Rennen — Konflikt offen")
-        } catch {
-            log.error("Server-Merge-Push fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            log.notice("Auto-Merge \(pid, privacy: .public): \(n, privacy: .public)× erneut 409 — als sichtbaren Konflikt erfasst")
+        } else {
+            log.notice("Auto-Merge verlor das Rennen (erneut 409, \(n, privacy: .public)/\(self.maxAutoMergeRetries, privacy: .public)): \(pid, privacy: .public)")
         }
     }
 

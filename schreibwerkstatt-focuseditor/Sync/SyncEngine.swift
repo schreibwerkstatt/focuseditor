@@ -559,6 +559,10 @@ final class SyncEngine: ObservableObject {
         pollTask = nil
         saveSyncTask?.cancel()
         saveSyncTask = nil
+        // Ein vorgemerkter Nachlauf darf das Anhalten nicht überleben: beim
+        // Serverwechsel endete der alte Durchlauf sonst mit `requestSync()` —
+        // ein frischer Lauf mitten im Store-Tausch (`suspendForServerSwitch`).
+        syncAgainAfterRun = false
     }
 
     // MARK: - Durchlauf

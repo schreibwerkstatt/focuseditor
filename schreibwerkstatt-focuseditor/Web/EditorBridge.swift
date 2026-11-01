@@ -156,6 +156,11 @@ final class EditorBridge: NSObject, WKScriptMessageHandlerWithReply, EditorCoord
     /// Datenverlust-Pfad. Treibt einen sichtbaren Warn-Banner (gesetzt von `AppCore`
     /// → `LibraryStore`), statt den Fehler still im Log verschwinden zu lassen.
     var onSaveResult: ((String?) -> Void)?
+    /// Ein lokaler Save hat den Inhalt wirklich geändert (neuer Outbox-Stand).
+    /// Inhaltsgleiche Saves (Flush beim Fensterwechsel, Autosave ohne Eingabe)
+    /// melden sich hier NICHT — sonst stiesse jeder davon einen leeren
+    /// Sync-Durchlauf an. Treibt den entprellten Push (`SyncEngine.noteLocalSave`).
+    var onLocalChange: (() -> Void)?
     /// Ein Widerrufen (`true`) bzw. Wiederherstellen (`false`) im Editor hat
     /// gerade `chars` Zeichen entfernt bzw. wieder eingesetzt. WebKit fasst eine
     /// ganze Tippstrecke in EINEN Undo-Schritt zusammen (alles seit dem letzten

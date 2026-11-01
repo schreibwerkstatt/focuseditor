@@ -209,8 +209,38 @@ extension WebAssets {
                   if (currentPageId !== String(p.pageId)) return false;
                   return await applyPage(p.pageId, { save: false });
                 }
+                const h = window.__standalone;
+                if (h && typeof h.replaceContent === 'function' && typeof p.html === 'string') {
+                  return await replaceOpenPage(String(p.pageId), p.html);
+                }
+                // Älteres Bundle ohne replaceContent: wie bisher per setPage.
                 return await applyPage(p.pageId, { save: false, onlyIfClean: true });
               };
+              // Neuer Server-Stand DERSELBEN offenen Seite (gemergter Push, Pull
+              // der sauberen Seite) per `replaceContent` (editor-api.d.ts):
+              // Caret bleibt, Undo-Historie bleibt (der Tausch ist ein Schritt),
+              // kein Save. Ob seit dem gesendeten Stand getippt wurde, prüft der
+              // Editor selbst — dann `false`, und Swift dreht die Basis zurück.
+              // Der Tausch feuert kein `input`: die Zähler hier selbst anstossen.
+              async function replaceOpenPage(pid, html) {
+                if (switchesInFlight !== 0 || currentPageId !== pid) return false;
+                // Basis wie beim Laden (lokaler `updatedAt` aus dem Spiegel, den
+                // Swift vor diesem Aufruf schon auf den neuen Stand gesetzt hat).
+                let page = null;
+                try { page = await fb.load(pid); } catch (_) {}
+                if (switchesInFlight !== 0 || currentPageId !== pid) return false;
+                let ok = false;
+                try { ok = window.__standalone.replaceContent(html) === true; } catch (_) {}
+                if (!ok) return false;
+                bases.set(pid, page ? (page.updatedAt ?? null) : null);
+                reportEditorState(pid, false);
+                resetTextLen();
+                try { window.__countStats && window.__countStats(); } catch (_) {}
+                // Rechtschreibung braucht keinen Anstoss: der Controller hängt am
+                // MutationObserver des Roots und prüft den getauschten Text selbst
+                // (in WebKit nachgemessen).
+                return true;
+              }
               // Seite schliessen (Buchwechsel ODER bewusst über die Toolbar):
               // aktuellen Stand sichern (local-first), die Schreibfläche leeren
               // und die ruhige Leerfläche einblenden. Swift öffnet danach den

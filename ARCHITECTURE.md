@@ -102,7 +102,7 @@ Alle Dateien unter [Web/](schreibwerkstatt-focuseditor/Web/).
 - `languagetoolCheck`/`dictionaryAdd` proxyen über `APIClient`; lokale `SpellcheckPrefs` (UserDefaults) können vor dem Roundtrip abkürzen.
 - `console.log/info/warn/error` werden in der Facade abgefangen und über `log` ins OS-Log gespiegelt (einzeilig + gekürzt).
 
-**Swift → JS** (über `callAsyncJavaScript` in `contentWorld: .page`, Ziel `window.__focusBridge._receive`): `openPage`, `closePage`, `focusGranularity`, `editorTypography`, `format`, `normalizeQuotes`, `synonyms`. Plus die awaitbaren Direktaufrufe `reloadPage(…, force:) -> Bool` (`_serverUpdate`, der stille Server-Refresh — mit Antwort, weil Swift bei Ablehnung die Sync-Basis zurückdreht), `flushDraftSave()` (⌘S-Vorlauf) und `merge3(base:local:server:)`, das `window.__focusBridge._merge3(...)` aufruft (lädt `block-merge.js` dynamisch) und `MergeOutcome { merged, conflictCount }` zurückgibt.
+**Swift → JS** (über `callAsyncJavaScript` in `contentWorld: .page`, Ziel `window.__focusBridge._receive`): `openPage`, `closePage`, `focusGranularity`, `editorTypography`, `format`, `normalizeQuotes`, `synonyms`. Plus die awaitbaren Direktaufrufe `reloadPage(…, force:) -> Bool` (`_serverUpdate`, der stille Server-Refresh — mit Antwort, weil Swift bei Ablehnung die Sync-Basis zurückdreht; ohne `force` per `handle.replaceContent` statt `setPage`, sofern das Bundle es kann: Caret und Undo-Historie bleiben), `flushDraftSave()` (⌘S-Vorlauf) und `merge3(base:local:server:)`, das `window.__focusBridge._merge3(...)` aufruft (lädt `block-merge.js` dynamisch) und `MergeOutcome { merged, conflictCount }` zurückgibt.
 
 **Härtung** (die WebView ist eine nicht vertrauenswürdige Quelle — sie führt fremden Editor-Code aus dem OTA-Bundle aus):
 
@@ -111,7 +111,7 @@ Alle Dateien unter [Web/](schreibwerkstatt-focuseditor/Web/).
 3. **Kein Swift→JS-Aufruf ohne Timeout** (`jsCallTimeout` 5 s, Merge 8 s): ein hängendes JS darf den awaitenden Swift-Pfad (⌘S-Flush, Lektorats-Vorlauf, 409-Merge) nicht einfrieren.
 4. Event-Skripte nutzen Optional-Chaining (nicht gebootete Seite = stilles No-op) und `emit` filtert `nil`-Felder heraus (`callAsyncJavaScript` akzeptiert nur JSON-Werte).
 
-**Callbacks nach aussen:** `onOpenPageChange`/`onPageOpened` (→ `LibraryStore`/`SyncEngine`), `onOpenDirtyChange` (Save-Indikator), `onStats` (→ `WritingStatsStore`), `onActivity` (→ `WritingTimeTracker`), `onSaveResult` (Save-Fehler-Banner). Lese-Properties für den Boot-Pull: `focusGranularity`, `typography` (gesetzt von den Controllern).
+**Callbacks nach aussen:** `onOpenPageChange`/`onPageOpened` (→ `LibraryStore`/`SyncEngine`), `onOpenDirtyChange` (Save-Indikator), `onStats` (→ `WritingStatsStore`), `onActivity` (→ `WritingTimeTracker`), `onSaveResult` (Save-Fehler-Banner), `onLocalChange` (Save mit echter Inhaltsänderung → `SyncEngine.noteLocalSave`). Lese-Properties für den Boot-Pull: `focusGranularity`, `typography` (gesetzt von den Controllern).
 
 ### EditorCoordinating — Entkopplung Sync ⇄ WebView
 
@@ -198,7 +198,7 @@ Getrieben von Scene-Phase (`setActive(_:)`) + Reachability:
 
 - `setActive(true)` → sofortiger `requestSync()` + `startPolling()`. Hintergrund → Draft flushen + sofortiger Tick, dann `startPolling()` im Hintergrund-Takt.
 - `startPolling()` läuft `Task.sleep(for: interval)` in Schleife; `interval` aus [SyncCadence.swift](schreibwerkstatt-focuseditor/Sync/SyncCadence.swift)`.interval(mode:isPaused:isActive:)`: aktiv der `pollMode` ([SyncPreferences.swift](schreibwerkstatt-focuseditor/Sync/SyncPreferences.swift): `.active` ~5 s / `.relaxed` ~30 s), im Hintergrund höchstens alle 60 s (`backgroundInterval`); `.manual`/pausiert = nil.
-- `noteLocalSave()` (aus `bridge.onSaveResult` bei Erfolg) → entprellter Tick nach 1,5 s (`saveSyncDelay`), damit ein Edit nicht bis zum nächsten Poll in der Outbox liegt. `pushBeforeQuit()` → bei vorhandener Outbox ein auf 4 s befristeter Durchlauf (`quitPushTimeout`). Beide still bei `.manual`/pausiert.
+- `noteLocalSave()` (aus `bridge.onLocalChange`, nur bei echter Inhaltsänderung — ein inhaltsgleicher Save, etwa der Flush beim Fensterwechsel, stösst keinen Durchlauf an) → entprellter Tick nach 1,5 s (`saveSyncDelay`), damit ein Edit nicht bis zum nächsten Poll in der Outbox liegt. `pushBeforeQuit()` → bei vorhandener Outbox ein auf 4 s befristeter Durchlauf (`quitPushTimeout`). Beide still bei `.manual`/pausiert.
 - [Reachability.swift](schreibwerkstatt-focuseditor/Sync/Reachability.swift) (`NWPathMonitor`) → bei Online-Übergang sofort ein Tick.
 - `isRunning` verhindert parallele Ticks; ein abgewiesener Auto-Tick setzt `syncAgainAfterRun` und läuft nach dem Durchlauf. `isPaused` (transient) und `pollMode` (persistiert) steuern UI/Verhalten.
 

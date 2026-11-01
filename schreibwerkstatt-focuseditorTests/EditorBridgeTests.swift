@@ -173,6 +173,21 @@ final class EditorBridgeTests: XCTestCase {
                       "Inhaltsgleicher Save darf keinen neuen Outbox-Eintrag erzeugen")
     }
 
+    /// Nur ein Save mit echter Änderung stösst den Push an — ein inhaltsgleicher
+    /// (Flush beim Fensterwechsel) fuhre sonst einen leeren Sync-Durchlauf.
+    func testLocalChangeFiresOnlyForChangedContent() async throws {
+        let (bridge, _) = makeBridge()
+        var changes = 0
+        var results = 0
+        bridge.onLocalChange = { changes += 1 }
+        bridge.onSaveResult = { _ in results += 1 }
+        _ = try await bridge.route(op: "save", params: ["pageId": "p1", "html": "<p>x</p>"])
+        _ = try await bridge.route(op: "save", params: ["pageId": "p1", "html": "<p>x</p>"])
+        _ = try await bridge.route(op: "save", params: ["pageId": "p1", "html": "<p>y</p>"])
+        XCTAssertEqual(changes, 2, "neu + geändert, nicht der inhaltsgleiche")
+        XCTAssertEqual(results, 3, "der Banner-Hook sieht weiterhin jeden Save")
+    }
+
     func testSaveMissingHtmlThrows() async throws {
         let (bridge, _) = makeBridge()
         await assertThrowsBridgeError(missingParam: "html") {

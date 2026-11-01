@@ -104,12 +104,11 @@ final class AppCore: ObservableObject {
         sync.editor = bridge   // SyncEngine ↔ Editor-Kopplung (schwach gehalten)
         // Ergebnis eines lokalen Saves → Warn-Banner (Fehler) bzw. dessen Auflösung
         // (Erfolg). Ein fehlgeschlagener Save ist ein echter Datenverlust-Pfad und
-        // darf nicht nur im Log stehen. Ein gelungener stösst den entprellten Push
-        // an — sonst läge der Edit bis zum nächsten Poll-Tick in der Outbox.
-        bridge.onSaveResult = { [weak library, weak sync] message in
-            library?.reportSaveResult(message)
-            if message == nil { sync?.noteLocalSave() }
-        }
+        // darf nicht nur im Log stehen.
+        bridge.onSaveResult = { [weak library] message in library?.reportSaveResult(message) }
+        // Ein Save mit echter Änderung stösst den entprellten Push an — sonst
+        // läge der Edit bis zum nächsten Poll-Tick in der Outbox.
+        bridge.onLocalChange = { [weak sync] in sync?.noteLocalSave() }
         self.sync = sync
         // Offline-Boot-Lücke: startete die App ohne erreichbaren Server, lief
         // `spellcheckConfig` beim Boot leer zurück → der Spellcheck-Controller

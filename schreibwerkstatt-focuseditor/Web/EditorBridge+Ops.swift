@@ -124,9 +124,13 @@ extension EditorBridge {
             return nil
         }
         do {
+            // Vorher-Stand nur für die Änderungs-Meldung: `store.save` überspringt
+            // inhaltsgleiche Saves still und gibt dann die bestehende Zeile zurück.
+            let previousHtml = try? await store.page(id: pageId)?.html
             let saved = try await store.save(id: pageId, html: html, baseUpdatedAt: base)
             // Erfolgreicher Save → einen zuvor gezeigten Save-Fehler-Banner lösen.
             onSaveResult?(nil)
+            if previousHtml != html { onLocalChange?() }
             return ["id": saved.id, "updatedAt": saved.updatedAt]
         } catch {
             // Lokaler Save fehlgeschlagen = potenzieller Datenverlust → den

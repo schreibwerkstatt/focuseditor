@@ -435,6 +435,29 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(pending.map(\.pageId), ["5"], "lokaler Stand bleibt")
     }
 
+    /// Ein 409 OHNE `merge_conflicts` auf den Server-Merge ist ein verlorenes
+    /// Rennen, keine Kollision: still neu versuchen (Zähler), kein Konflikt-Sheet.
+    func testServerMergeRaceRetriesSilently() async throws {
+        let store = FakeStore()
+        _ = try await store.save(id: "5", html: "<p>local</p>", baseUpdatedAt: nil)
+        let engine = makeEngine(store: store)
+        engine.stateStore.mutate { $0.serverBaseISO["5"] = base }
+        store.ancestors["5"] = "<p>ancestor</p>"
+        router.on("PUT", "/content/pages/5", [
+            push(409, #"{"error_code":"PAGE_CONFLICT","server_updated_at":"\#(newer)"}"#),
+            push(409, #"{"error_code":"PAGE_CONFLICT","server_updated_at":"\#(newer)"}"#),
+        ])
+        router.on("GET", "/content/pages/5",
+                  [push(200, #"{"id":5,"updated_at":"\#(newer)","html":"<p>server</p>"}"#)])
+
+        try await engine.pushOutbox()
+
+        XCTAssertTrue(engine.conflicts.isEmpty, "Rennen ≠ Kollision")
+        XCTAssertEqual(engine.autoMergeRe409["5"], 1)
+        let pending = try await store.pendingOutbox()
+        XCTAssertEqual(pending.map(\.pageId), ["5"], "lokaler Stand bleibt für den nächsten Tick")
+    }
+
     func testPush409RealCollisionRecordsConflict() async throws {
         let store = FakeStore()
         _ = try await store.save(id: "5", html: "<p>local</p>", baseUpdatedAt: nil)
