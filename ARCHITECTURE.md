@@ -194,12 +194,13 @@ Alle Dateien unter [Sync/](schreibwerkstatt-focuseditor/Sync/). Kern ist die `@M
 
 ### Poll-Loop
 
-Getrieben von Scene-Phase (`setActive(_:)`) + Reachability:
+Getrieben von „aktiv" (`setActive(_:)`, aus Scene-Phase UND `NSApplication.didBecomeActive/didResignActive` — die Scene-Phase allein bleibt auf macOS beim App-Wechsel `.active`) + Reachability:
 
 - `setActive(true)` → sofortiger `requestSync()` + `startPolling()`. Hintergrund → Draft flushen + sofortiger Tick, dann `startPolling()` im Hintergrund-Takt.
 - `startPolling()` läuft `Task.sleep(for: interval)` in Schleife; `interval` aus [SyncCadence.swift](schreibwerkstatt-focuseditor/Sync/SyncCadence.swift)`.interval(mode:isPaused:isActive:)`: aktiv der `pollMode` ([SyncPreferences.swift](schreibwerkstatt-focuseditor/Sync/SyncPreferences.swift): `.active` ~5 s / `.relaxed` ~30 s), im Hintergrund höchstens alle 60 s (`backgroundInterval`); `.manual`/pausiert = nil.
 - `noteLocalSave()` (aus `bridge.onLocalChange`, nur bei echter Inhaltsänderung — ein inhaltsgleicher Save, etwa der Flush beim Fensterwechsel, stösst keinen Durchlauf an) → entprellter Tick nach 1,5 s (`saveSyncDelay`), damit ein Edit nicht bis zum nächsten Poll in der Outbox liegt. `pushBeforeQuit()` → bei vorhandener Outbox ein auf 4 s befristeter Durchlauf (`quitPushTimeout`). Beide still bei `.manual`/pausiert.
 - [Reachability.swift](schreibwerkstatt-focuseditor/Sync/Reachability.swift) (`NWPathMonitor`) → bei Online-Übergang sofort ein Tick.
+- Loop und Entprell-Tick fahren den Durchlauf in einem eigenen Task (`runDetached`): beide werden bei jedem App-Wechsel per `cancel()` neu aufgesetzt, ein darin laufender Durchlauf brach sonst mit `CancellationError` ab. Ein abgebrochener Schlaf löst keinen Tick mehr aus. `start()` startet den Loop sofort, auch wenn die App im Hintergrund startet.
 - `isRunning` verhindert parallele Ticks; ein abgewiesener Auto-Tick setzt `syncAgainAfterRun` und läuft nach dem Durchlauf. `isPaused` (transient) und `pollMode` (persistiert) steuern UI/Verhalten.
 
 Ein Tick macht Push, dann Pull, dann gedrosselt Delete-Reconcile (`reconcileInterval = 60 s`).

@@ -96,6 +96,17 @@ struct schreibwerkstatt_focuseditorApp: App {
         return host
     }
 
+    /// „Aktiv" für Sync-Takt und Schreibzeit = Fenster sichtbar UND App vorne.
+    /// Die Scene-Phase allein reicht auf macOS nicht: sie bleibt beim App-Wechsel
+    /// `.active` und kippt erst beim Minimieren/Beenden. Beide Empfänger sind
+    /// idempotent (`guard active != isActive`), doppelte Meldungen schaden nicht.
+    @MainActor
+    private func applyActivity(phase: ScenePhase, appActive: Bool) {
+        let active = phase == .active && appActive
+        core.sync.setActive(active)
+        core.writingTime.setActive(active)
+    }
+
     var body: some Scene {
         // Bewusst `Window` statt `WindowGroup`: die App ist eine Ein-Fenster-
         // Schreib-Shell (kein Dokumentmodell, „Neues Fenster" ist ersatzlos
@@ -169,14 +180,22 @@ struct schreibwerkstatt_focuseditorApp: App {
                         }
                     }
                 }
+                // App-Wechsel (⌘⇥, Klick in den Browser): die Scene-Phase bleibt
+                // dabei auf macOS `.active` (gemessen) — nur diese Notifications
+                // melden ihn. Ohne sie griffen Hintergrund-Takt, Push beim Wechsel
+                // und die Schreibzeit-Pause nie.
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    applyActivity(phase: scenePhase, appActive: true)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                    applyActivity(phase: scenePhase, appActive: false)
+                }
         }
-        // Poll-Takt folgt der Scene-Phase: aktiv im gewählten Takt, im Hintergrund
-        // gedrosselt (SyncCadence); Wechsel in den Hintergrund pusht sofort, beim
+        // Poll-Takt folgt „aktiv": im gewählten Takt, im Hintergrund gedrosselt
+        // (SyncCadence); Wechsel in den Hintergrund pusht sofort, beim
         // Reaktivieren sofort ein Tick (CLAUDE.md, Cross-Session-Frische).
         .onChange(of: scenePhase, initial: true) { _, phase in
-            core.sync.setActive(phase == .active)
-            // Schreibzeit zählt nur im aktiven Fenster (wie der Sync-Poll).
-            core.writingTime.setActive(phase == .active)
+            applyActivity(phase: phase, appActive: NSApp?.isActive ?? false)
         }
         .commands {
             // „Über …" — Standard-Panel mit eigenem Credits-Text: Kurzbeschreibung

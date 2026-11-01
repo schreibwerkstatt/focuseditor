@@ -232,6 +232,11 @@ final class SyncEngine: ObservableObject {
         }
         reachability.start()
         isOnline = reachability.isOnline
+        // Loop gleich hier starten, nicht erst beim ersten `setActive(true)`:
+        // startet die App im Hintergrund (Anmeldeobjekt, `open -g`), meldet die
+        // Scene-Phase zuerst „nicht aktiv" — das ist kein Wechsel, und ohne
+        // diesen Aufruf liefe bis zum ersten Aktivieren gar kein Poll.
+        startPolling()
         Task { await migrateLegacyAncestors() }
     }
 
@@ -368,8 +373,17 @@ final class SyncEngine: ObservableObject {
         saveSyncTask = Task { [weak self] in
             try? await Task.sleep(for: SyncCadence.saveSyncDelay)
             guard !Task.isCancelled, let self else { return }
-            await self.syncNow()
+            await self.runDetached()
         }
+    }
+
+    /// Einen Auto-Tick in einem EIGENEN Task fahren und abwarten. Der Loop- bzw.
+    /// Entprell-Task wird bei jedem App-Wechsel neu aufgesetzt (`cancel()`); lief
+    /// der Durchlauf in ihm, erbte er die Abbruch-Markierung und brach mitten in
+    /// GRDB-/Netz-Aufrufen mit `CancellationError` ab (gemessen: „Sync-Fehler"
+    /// beim Wegwechseln). Ein unstrukturierter Task erbt sie nicht.
+    private func runDetached() async {
+        await Task { [weak self] in await self?.syncNow() }.value
     }
 
     /// Letzter Push vor dem Beenden (⌘Q), nach dem Draft-Flush. Befristet:
@@ -541,8 +555,10 @@ final class SyncEngine: ObservableObject {
             guard let self else { return }
             // Erster Tick kommt über requestSync(); der Loop ergänzt Folge-Ticks.
             while !Task.isCancelled {
-                try? await Task.sleep(for: interval)
-                await self.syncNow()
+                // Abgebrochener Schlaf (Loop neu aufgesetzt, z. B. beim App-
+                // Wechsel) wirft — dann NICHT noch einen Tick hinterherschieben.
+                guard (try? await Task.sleep(for: interval)) != nil else { return }
+                await self.runDetached()
             }
         }
     }
