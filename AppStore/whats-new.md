@@ -19,6 +19,28 @@ Zwei Regeln, damit der Text stimmt:
 Die Erstversion braucht keinen Text — Apple zeigt „Neue Funktionen“ erst ab dem
 ersten Update und lässt das Feld dort leer.
 
+## 3.29 · Deutsch (max. 4000)
+
+```
+• Dein Text ist schneller auf dem Server: kurz nach dem Speichern, sobald du in eine andere App wechselst oder den Laptop zuklappst, und beim Beenden mit ⌘Q wird noch einmal abgeglichen. Wer danach auf einem anderen Gerät weiterschreibt, findet den neuesten Stand vor
+• Läuft die App im Hintergrund, bleibt sie in ruhigerem Takt auf dem Laufenden, statt den Abgleich ganz anzuhalten
+• Kommt eine Änderung von einem anderen Gerät in den offenen Abschnitt, bleiben Cursor-Position und „Widerrufen“ erhalten
+• Weniger Konflikt-Fenster: Lassen sich gleichzeitige Änderungen sauber zusammenführen, übernimmt das jetzt auch der Server — das Fenster erscheint nur noch, wenn wirklich derselbe Absatz auf beiden Seiten geändert wurde
+• Die Schreibzeit zählt nur noch, solange die App vorne ist
+• Frühere Fassungen: angeheftete Fassungen sind mit einer Nadel und ihrem Namen markiert, wiederhergestellte Fassungen heissen „Wiederhergestellt“
+```
+
+## 3.29 · English (max 4000)
+
+```
+• Your text reaches the server sooner: shortly after saving, as soon as you switch to another app or close the laptop, and once more when quitting with ⌘Q. Whoever continues on another device finds the latest version
+• While the app is in the background it keeps up at a calmer pace instead of stopping sync altogether
+• When a change from another device arrives in the open section, your cursor position and “Undo” are kept
+• Fewer conflict windows: if simultaneous changes can be merged cleanly, the server now takes care of it too — the window only appears when the very same paragraph was changed on both sides
+• Writing time now only counts while the app is in front
+• Earlier versions: pinned versions show a pin and their name, restored versions are labelled “Restored”
+```
+
 ## 3.28 · Deutsch (max. 4000)
 
 ```

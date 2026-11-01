@@ -44,22 +44,22 @@
       <EnvironmentVariables>
          <EnvironmentVariable
             key = "SW_E2E_BASE"
-            value = "http://localhost:3737"
+            value = "http://remote-desktop.lan:3737"
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "SW_E2E_TOKEN"
-            value = "swd_REDACTED_SET_TOKEN_LOCALLY_VIA_SEED"
+            value = ""
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "SW_E2E_BOOK"
-            value = "1000012"
+            value = "131"
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "SW_E2E_PAGE"
-            value = "1000101"
+            value = "1200"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>

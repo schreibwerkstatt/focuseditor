@@ -9,8 +9,9 @@
 //
 //  Konfiguration via Env (im Test-Scheme gesetzt); ohne diese Variablen
 //  überspringt der Test (XCTSkip) — so bleibt er CI-/Server-los harmlos:
-//    SW_E2E_BASE   z. B. http://localhost:3737
-//    SW_E2E_TOKEN  Device-Token swd_…
+//    SW_E2E_BASE   z. B. http://remote-desktop.lan:3737 (Default im Scheme)
+//    SW_E2E_TOKEN  Device-Token swd_… — leer = ohne Authorization-Header
+//                  (Dev-Server im LOCAL_DEV_MODE; ein Platzhalter gäbe 401)
 //    SW_E2E_BOOK   Buch-ID (Int)
 //    SW_E2E_PAGE   Seiten-ID (Int)
 //
@@ -28,7 +29,7 @@ import XCTest
 @MainActor
 final class SyncIntegrationTests: XCTestCase {
 
-    private struct Cfg { let base: String; let token: String; let book: Int; let page: Int }
+    private struct Cfg { let base: String; let token: String?; let book: Int; let page: Int }
 
     private func cfg() throws -> Cfg {
         let e = ProcessInfo.processInfo.environment
@@ -39,7 +40,7 @@ final class SyncIntegrationTests: XCTestCase {
             throw XCTSkip("SW_E2E_* nicht gesetzt — Integrationstest übersprungen (laufender Server + Seed nötig).")
         }
         ServerConfig.baseURLString = base
-        return Cfg(base: base, token: token, book: book, page: page)
+        return Cfg(base: base, token: token.isEmpty ? nil : token, book: book, page: page)
     }
 
     private func client(_ c: Cfg) -> APIClient {

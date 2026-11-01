@@ -49,9 +49,20 @@ summary=""; ok=1
 add() { [[ -n "$summary" ]] && summary="$summary · $1" || summary="$1"; }
 
 if (( run_tests )); then
+    # SyncIntegrationTests brauchen den Testserver aus dem Scheme (SW_E2E_BASE,
+    # Default remote-desktop.lan:3737). Ist er nicht erreichbar, würden sie mit
+    # -1004 FAILEN statt zu skippen → dann gezielt auslassen statt Fehlalarm.
+    skip_args=()
+    e2e_base=$(grep -A1 'key = "SW_E2E_BASE"' \
+        schreibwerkstatt-focuseditor.xcodeproj/xcshareddata/xcschemes/schreibwerkstatt-focuseditor.xcscheme \
+        | sed -n 's/.*value = "\(.*\)".*/\1/p')
+    if [[ -n "$e2e_base" ]] && ! curl -s -o /dev/null --max-time 3 "$e2e_base/config"; then
+        skip_args=(-skip-testing:schreibwerkstatt-focuseditorTests/SyncIntegrationTests)
+        add "Integrationstests übersprungen ($e2e_base nicht erreichbar)"
+    fi
     if xcodebuild test -project schreibwerkstatt-focuseditor.xcodeproj \
         -scheme schreibwerkstatt-focuseditor -destination 'platform=macOS' \
-        -quiet >"$TEST_LOG" 2>&1; then
+        ${skip_args[@]+"${skip_args[@]}"} -quiet >"$TEST_LOG" 2>&1; then
         add "Tests grün"
     else
         ok=0
