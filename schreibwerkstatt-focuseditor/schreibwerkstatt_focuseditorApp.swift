@@ -136,9 +136,12 @@ struct schreibwerkstatt_focuseditorApp: App {
                     }
                     // ⌘Q: dasselbe local-first, aber AWAITBAR — AppKit hält das
                     // Beenden dafür an (`.terminateLater`), sonst verlöre der
-                    // letzte Tastenanschlag gegen den entprellten Autosave.
+                    // letzte Tastenanschlag gegen den entprellten Autosave. Danach
+                    // ein befristeter letzter Push, damit andere Geräte den Stand
+                    // haben (still bei „manuell“/„pausiert“ und ohne Outbox).
                     terminationGuard.flushBeforeQuit = { [core] in
                         await core.bridge.flushDraftSave(timeout: EditorBridge.quitFlushTimeout)
+                        await core.sync.pushBeforeQuit()
                     }
                     // Fokus- + Typografie-Controller an die app-weite Bridge
                     // koppeln (Push der Live-Umschaltung), Stats-Kanal anhängen,
@@ -167,8 +170,9 @@ struct schreibwerkstatt_focuseditorApp: App {
                     }
                 }
         }
-        // Polling nur solange das Fenster aktiv ist; im Hintergrund pausieren,
-        // beim Reaktivieren sofort ein Tick (CLAUDE.md, Cross-Session-Frische).
+        // Poll-Takt folgt der Scene-Phase: aktiv im gewählten Takt, im Hintergrund
+        // gedrosselt (SyncCadence); Wechsel in den Hintergrund pusht sofort, beim
+        // Reaktivieren sofort ein Tick (CLAUDE.md, Cross-Session-Frische).
         .onChange(of: scenePhase, initial: true) { _, phase in
             core.sync.setActive(phase == .active)
             // Schreibzeit zählt nur im aktiven Fenster (wie der Sync-Poll).

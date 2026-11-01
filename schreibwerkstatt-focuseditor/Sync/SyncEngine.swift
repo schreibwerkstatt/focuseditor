@@ -115,10 +115,14 @@ final class SyncEngine: ObservableObject {
     /// verhindert Retry-Spam).
     var onServerReached: (@MainActor () -> Void)?
 
-    /// Aktive Poll-Periode aus dem gewählten Modus (`nil` = manuell, kein Loop).
-    private var pollInterval: Duration? { isPaused ? nil : pollMode.interval }
-    /// Soll der Auto-Poll laufen? (Aktives Fenster + Modus ≠ manuell + nicht pausiert.)
-    private var autoPollEnabled: Bool { isActive && !isPaused && pollMode.interval != nil }
+    /// Aktive Poll-Periode (`nil` = manuell/pausiert, kein Loop); im Hintergrund
+    /// gedrosselt (`SyncCadence`).
+    private var pollInterval: Duration? {
+        SyncCadence.interval(mode: pollMode, isPaused: isPaused, isActive: isActive)
+    }
+    /// Läuft der automatische Sync? (Modus ≠ manuell + nicht pausiert — im
+    /// aktiven Fenster wie im Hintergrund.)
+    private var autoPollEnabled: Bool { SyncCadence.autoEnabled(mode: pollMode, isPaused: isPaused) }
     /// Delete-Reconcile ist teurer (ein Tree-Fetch je Buch) → seltener als der
     /// Poll. Mindestabstand zwischen zwei Reconcile-Durchläufen.
     let reconcileInterval: TimeInterval = 60
@@ -140,10 +144,22 @@ final class SyncEngine: ObservableObject {
     var autoMergeRe409: [String: Int] = [:]
 
     /// Läuft gerade ein Durchlauf (`syncNow` oder `pullPage`)? Wird er frei,
-    /// laufen die Wartenden aus `waitUntilIdle()` weiter.
+    /// laufen die Wartenden aus `waitUntilIdle()` weiter, und ein in der
+    /// Zwischenzeit abgewiesener Auto-Tick (`syncAgainAfterRun`) holt sich nach.
     private var isRunning = false {
         didSet {
-            guard !isRunning, !idleWaiters.isEmpty else { return }
+            guard !isRunning else { return }
+            guard !idleWaiters.isEmpty else {
+                if syncAgainAfterRun {
+                    syncAgainAfterRun = false
+                    requestSync()
+                }
+                return
+            }
+            // Ein wartender manueller Durchlauf läuft gleich selbst und nimmt den
+            // nachgeholten Auto-Tick mit — ein eigener Tick käme ihm womöglich
+            // zuvor, und der Aufrufer (⌘S, Lektorats-Vorlauf) kehrte ohne Push zurück.
+            syncAgainAfterRun = false
             let waiters = idleWaiters
             idleWaiters = []
             waiters.forEach { $0.resume() }
@@ -166,6 +182,11 @@ final class SyncEngine: ObservableObject {
     private var halted = false
     private var isActive = false
     private var pollTask: Task<Void, Never>?
+    /// Entprellter Push-Tick nach einem lokalen Save (`noteLocalSave`).
+    private var saveSyncTask: Task<Void, Never>?
+    /// Ein Auto-Tick kam, während ein Durchlauf lief → danach noch einmal laufen,
+    /// sonst wartete ein frischer Save bis zum nächsten Poll-Tick.
+    private var syncAgainAfterRun = false
     /// Wurde der Server im laufenden Sync-Durchlauf (transport-seitig) erreicht?
     /// Jede HTTP-Antwort (auch 4xx/5xx/401) zählt als erreichbar, nur ein echter
     /// Transport-Fehler (`AuthError.network`: Verbindung abgelehnt/Timeout/TLS)
@@ -193,8 +214,8 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Lifecycle
 
-    /// Startet die Reachability-Beobachtung. Das Polling selbst hängt an der
-    /// Scene-Phase und wird über `setActive(_:)` ein-/ausgeschaltet.
+    /// Startet die Reachability-Beobachtung. Den Poll-Takt (aktiv vs. Hintergrund)
+    /// setzt die Scene-Phase über `setActive(_:)`.
     func start() {
         reachability.onChange = { [weak self] online in
             guard let self else { return }
@@ -315,22 +336,63 @@ final class SyncEngine: ObservableObject {
         autoMergeRe409 = [:]
         lastError = nil
         status = .idle
-        if isActive {
-            if autoPollEnabled { requestSync() }
-            startPolling()
-        }
+        if autoPollEnabled { requestSync() }
+        startPolling()
     }
 
-    /// Vom Scene-Phasen-Wechsel getrieben: aktiv → sofortiger Tick + 5 s-Poll;
-    /// inaktiv/Hintergrund → Poll pausieren (CLAUDE.md: nur solange Fenster aktiv).
+    /// Vom Scene-Phasen-Wechsel getrieben: aktiv → sofortiger Tick + Poll im
+    /// gewählten Takt; inaktiv/Hintergrund → Draft sichern, sofort pushen und
+    /// gedrosselt weiterpollen (`SyncCadence.backgroundInterval`). Wer gerade ins
+    /// Browserfenster wechselt oder den Deckel zuklappt, soll den eben
+    /// geschriebenen Stand auf dem Server haben, nicht in der Outbox.
     func setActive(_ active: Bool) {
         guard active != isActive else { return }
         isActive = active
         if active {
             if autoPollEnabled { requestSync() }   // sofortiger Tick beim Reaktivieren
-            startPolling()
-        } else {
-            stopPolling()
+        } else if autoPollEnabled {
+            Task {
+                await editor?.flushDraftSave()
+                await syncNow()
+            }
+        }
+        startPolling()
+    }
+
+    /// Ein lokaler Save ist im Store (Bridge → `opSave`). Entprellt einen Tick,
+    /// damit der Edit nicht bis zum nächsten Poll in der Outbox liegt. Still bei
+    /// „manuell“/„pausiert“ — dort entscheidet der Nutzer, wann gepusht wird.
+    func noteLocalSave() {
+        guard autoPollEnabled else { return }
+        saveSyncTask?.cancel()
+        saveSyncTask = Task { [weak self] in
+            try? await Task.sleep(for: SyncCadence.saveSyncDelay)
+            guard !Task.isCancelled, let self else { return }
+            await self.syncNow()
+        }
+    }
+
+    /// Letzter Push vor dem Beenden (⌘Q), nach dem Draft-Flush. Befristet:
+    /// antwortet der Server nicht rechtzeitig, beendet die App trotzdem — die
+    /// Outbox bleibt und geht beim nächsten Start raus; eine verlorene Antwort
+    /// erkennt der Server an der Save-Kennung. Still bei „manuell“/„pausiert“.
+    func pushBeforeQuit() async {
+        guard autoPollEnabled, shouldSync(), !halted, reachability.isOnline else { return }
+        let pending = (try? await store.pendingOutbox().count) ?? 0
+        guard pending > 0 else { return }
+        // Wettlauf Push ↔ Frist; wer zuerst fertig ist, gibt das Beenden frei.
+        // Keine TaskGroup: die wartete am Ende auf den Push, die Frist wäre wirkungslos.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let gate = ResumeOnceVoid(continuation)
+            let timer = Task {
+                try? await Task.sleep(for: SyncCadence.quitPushTimeout)
+                gate.resume()
+            }
+            Task {
+                await self.syncNow(manual: true)
+                gate.resume()
+                timer.cancel()
+            }
         }
     }
 
@@ -469,8 +531,8 @@ final class SyncEngine: ObservableObject {
         await reloadOpenPageOrRevertBase(pid, html: html, ms: ms, previous: previous)
     }
 
-    /// Startet den Poll-Loop, sofern der Auto-Poll erlaubt ist; sonst No-op
-    /// (manueller Modus/pausiert → kein automatischer Tick).
+    /// Startet den Poll-Loop im Takt des aktuellen Zustands (aktiv/Hintergrund);
+    /// No-op bei manuellem Modus/pausiert.
     private func startPolling() {
         pollTask?.cancel()
         pollTask = nil
@@ -485,9 +547,8 @@ final class SyncEngine: ObservableObject {
         }
     }
 
-    /// Loop nach einer Modus-/Pause-Änderung neu aufsetzen (nur im aktiven Fenster).
+    /// Loop nach einer Modus-/Pause-Änderung neu aufsetzen.
     private func restartPolling() {
-        guard isActive else { return }
         stopPolling()
         if autoPollEnabled { requestSync() }
         startPolling()
@@ -496,22 +557,26 @@ final class SyncEngine: ObservableObject {
     private func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+        saveSyncTask?.cancel()
+        saveSyncTask = nil
     }
 
     // MARK: - Durchlauf
 
     func syncNow(manual: Bool = false) async {
-        // Auto-Tick: nur bei aktivem Fenster + gemeldeter Erreichbarkeit. Manueller
+        // Auto-Tick: nur bei automatischem Modus (nicht manuell/pausiert) + gemeldeter
+        // Erreichbarkeit — im aktiven Fenster wie im Hintergrund. Manueller
         // Auslöser umgeht beide Gates (Reachability klärt der Request selbst), nur
         // `shouldSync()` (signedIn) und der Reentrancy-Schutz bleiben verbindlich.
         guard shouldSync(), !halted else { return }
-        guard manual || (isActive && reachability.isOnline) else { return }
+        guard manual || (autoPollEnabled && reachability.isOnline) else { return }
         if isRunning {
-            // Auto-Tick: der laufende Durchlauf genügt. Manuell (⌘S, Lektorats-/
-            // Export-Vorlauf) dagegen NICHT einfach verpuffen lassen: der Aufrufer
-            // hat eben den Draft gesichert und verlässt sich darauf, dass er danach
-            // auf dem Server liegt. Also warten und selbst noch einmal laufen.
-            guard manual else { return }
+            // Auto-Tick: nach dem laufenden Durchlauf noch einmal — er hat einen
+            // eben gespeicherten Stand womöglich schon hinter sich. Manuell (⌘S,
+            // Lektorats-/Export-Vorlauf) dagegen NICHT verpuffen lassen: der
+            // Aufrufer hat eben den Draft gesichert und verlässt sich darauf, dass
+            // er danach auf dem Server liegt. Also warten und selbst noch einmal laufen.
+            guard manual else { syncAgainAfterRun = true; return }
             await waitUntilIdle()
             guard shouldSync(), !isRunning else { return }
         }
@@ -622,6 +687,22 @@ final class SyncEngine: ObservableObject {
         stateStore.mutate { $0.conflicts = dtos }
     }
 
+}
+
+/// Erfüllt eine Continuation genau einmal — der Wettlauf zwischen letztem Push
+/// und Frist in `pushBeforeQuit` darf nicht doppelt resumen (Absturz).
+private final class ResumeOnceVoid {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<Void, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume() {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume()
+    }
 }
 
 /// Ein laufender Sync-Durchlauf wurde von einem Server-Wechsel bzw. Spiegel-

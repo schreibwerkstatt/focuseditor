@@ -64,6 +64,11 @@ struct BookSyncResponse: Decodable {
 /// `save_id`/`own_save_ids` (Save-Kennung, s. `OutboxEntry`): nur reguläre
 /// Outbox-Pushs setzen sie; `nil` lässt das Feld weg. Ein Server ohne das
 /// Feature ignoriert beide.
+///
+/// `base_html` (Merge-Ancestor) setzt nur der Rückfall, wenn der Block-Merge in
+/// der WebView nicht läuft (`SyncEngine.serverMergeFallback`): dann mergt der
+/// Server einen veralteten Push selbst. Reguläre Pushs lassen es weg — der Mac
+/// mergt sonst selbst per `merge3`.
 struct PushRequest: Encodable {
     let html: String
     let expected_updated_at: String?
@@ -71,6 +76,7 @@ struct PushRequest: Encodable {
     var device_id: String = DeviceIdentity.current
     var save_id: String?
     var own_save_ids: [String]?
+    var base_html: String?
 }
 
 /// 200-Antwort von `PUT /content/pages/:id`. Seiten-ID heißt hier `id`.
@@ -91,10 +97,9 @@ struct PushResponse: Decodable {
     /// Nur in der PUT-Antwort: `"replay"` (Wiederholung, nichts geschrieben) oder
     /// `"own"` (veralteter Stempel, aber die letzte Kennung war unsere).
     var save_match: String?
-    /// Nur in der PUT-Antwort auf einen Push MIT `base_html`: der Server hat
-    /// blockweise gemergt, `html` ist der neue Stand. Der Mac schickt
-    /// `base_html` nicht (er mergt selbst per `merge3`) — das Feld ist nur
-    /// bekannt, damit der Vertrag vollständig dekodiert.
+    /// Nur in der PUT-Antwort auf einen Push MIT `base_html` (Rückfall
+    /// `serverMergeFallback`): der Server hat blockweise gemergt, `html` ist der
+    /// neue Stand.
     var merged: Bool?
 }
 
@@ -104,8 +109,8 @@ struct ConflictBody: Decodable {
     let server_updated_at: String?
     let server_editor_email: String?
     let server_editor_name: String?
-    /// Nur bei einem Push MIT `base_html`: `data-bid` der kollidierenden Blöcke.
-    /// Der Mac schickt `base_html` nicht; bekannt nur für den Vertrag.
+    /// Nur bei einem Push MIT `base_html` (Rückfall `serverMergeFallback`):
+    /// `data-bid` der kollidierenden Blöcke.
     var merge_conflicts: [String]?
 }
 

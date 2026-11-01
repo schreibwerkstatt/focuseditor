@@ -25,6 +25,11 @@
 //  Krankheit, und der JS-seitige `blur`-Flush (WebAssets+IndexHTML) hat den
 //  Stand bei einem Fensterwechsel ohnehin schon gesichert.
 //
+//  Danach folgt ein ebenso befristeter letzter Push (`SyncEngine.pushBeforeQuit`,
+//  `SyncCadence.quitPushTimeout`), damit andere Geräte den Stand haben. Er läuft
+//  nur bei automatischem Sync und vorhandener Outbox; bleibt der Server aus, geht
+//  die Outbox beim nächsten Start raus.
+//
 
 import AppKit
 

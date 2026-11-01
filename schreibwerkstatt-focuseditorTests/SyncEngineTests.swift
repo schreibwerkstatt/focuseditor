@@ -379,6 +379,62 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(store.pages["5"]?.html, "<p>merged</p>", "lokaler Stand = Merge-Ergebnis")
     }
 
+    /// Ohne WebView-Merge (kein Editor), aber mit Ancestor mergt der Server:
+    /// derselbe Push mit `base_html` gegen die ALTE Basis — mit der neuen schriebe
+    /// er blind über die fremde Änderung. Den gemergten Stand übernimmt der Spiegel.
+    func testPush409WithoutEditorFallsBackToServerMerge() async throws {
+        let store = FakeStore()
+        _ = try await store.save(id: "5", html: "<p>local</p>", baseUpdatedAt: nil)
+        let engine = makeEngine(store: store)   // kein Editor
+        engine.stateStore.mutate { $0.serverBaseISO["5"] = base }
+        store.ancestors["5"] = "<p>ancestor</p>"
+        let merged = "2026-01-03T00:00:00.000Z"
+        router.on("PUT", "/content/pages/5", [
+            push(409, #"{"error_code":"PAGE_CONFLICT","server_updated_at":"\#(newer)"}"#),
+            push(200, #"{"id":5,"updated_at":"\#(merged)","html":"<p>server-merged</p>","merged":true}"#),
+        ])
+        router.on("GET", "/content/pages/5",
+                  [push(200, #"{"id":5,"updated_at":"\#(newer)","html":"<p>server</p>"}"#)])
+
+        try await engine.pushOutbox()
+
+        let sent = router.sentBodies("PUT", "/content/pages/5").compactMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        }
+        XCTAssertEqual(sent.count, 2)
+        XCTAssertEqual(sent.last?["base_html"] as? String, "<p>ancestor</p>")
+        XCTAssertEqual(sent.last?["expected_updated_at"] as? String, base, "gegen die alte Basis, nicht `newer`")
+        XCTAssertNil(sent.last?["save_id"], "Merge-Pushs tragen keine Save-Kennung")
+        XCTAssertNil(sent.first?["base_html"], "der reguläre Push schickt kein base_html")
+        XCTAssertTrue(engine.conflicts.isEmpty)
+        let pending = try await store.pendingOutbox()
+        XCTAssertTrue(pending.isEmpty)
+        XCTAssertEqual(store.pages["5"]?.html, "<p>server-merged</p>", "lokaler Stand = Server-Merge")
+        XCTAssertEqual(engine.stateStore.state.serverBaseISO["5"], merged)
+    }
+
+    /// Findet der Server-Merge eine echte Block-Kollision (409), bleibt es beim
+    /// sichtbaren Konflikt — der lokale Stand bleibt in der Outbox.
+    func testServerMergeCollisionRecordsConflict() async throws {
+        let store = FakeStore()
+        _ = try await store.save(id: "5", html: "<p>local</p>", baseUpdatedAt: nil)
+        let engine = makeEngine(store: store)
+        engine.stateStore.mutate { $0.serverBaseISO["5"] = base }
+        store.ancestors["5"] = "<p>ancestor</p>"
+        router.on("PUT", "/content/pages/5", [
+            push(409, #"{"error_code":"PAGE_CONFLICT","server_updated_at":"\#(newer)"}"#),
+            push(409, #"{"error_code":"PAGE_CONFLICT","server_updated_at":"\#(newer)","merge_conflicts":["b1"]}"#),
+        ])
+        router.on("GET", "/content/pages/5",
+                  [push(200, #"{"id":5,"updated_at":"\#(newer)","html":"<p>server</p>"}"#)])
+
+        try await engine.pushOutbox()
+
+        XCTAssertEqual(engine.conflicts.map(\.pageId), ["5"])
+        let pending = try await store.pendingOutbox()
+        XCTAssertEqual(pending.map(\.pageId), ["5"], "lokaler Stand bleibt")
+    }
+
     func testPush409RealCollisionRecordsConflict() async throws {
         let store = FakeStore()
         _ = try await store.save(id: "5", html: "<p>local</p>", baseUpdatedAt: nil)

@@ -74,7 +74,7 @@ Der **Umbau im laufenden Betrieb** (Server-Namespace wechseln, lokale Daten nach
 - **Window** `"shortcuts-help"` → `ShortcutsHelpView` (⌘?)
 - **Settings** → `SettingsView` (⌘,)
 
-Der `.task`-Block verdrahtet die Controller an die Bridge (`focus.bind`, `typography.bind`, `writingStats.attach`), ruft `core.bootstrap()` und zieht nach Login den Server-Default für die Fokus-Stufe (`.onReceive(core.auth.$state)`). `.onChange(of: scenePhase)` reicht den aktiven Zustand an `sync.setActive(_:)` (Polling nur im Vordergrund).
+Der `.task`-Block verdrahtet die Controller an die Bridge (`focus.bind`, `typography.bind`, `writingStats.attach`), ruft `core.bootstrap()` und zieht nach Login den Server-Default für die Fokus-Stufe (`.onReceive(core.auth.$state)`). `.onChange(of: scenePhase)` reicht den aktiven Zustand an `sync.setActive(_:)` (Poll-Takt aktiv vs. Hintergrund). `terminationGuard.flushBeforeQuit` sichert den Draft und pusht danach befristet (`sync.pushBeforeQuit()`).
 
 ---
 
@@ -196,10 +196,11 @@ Alle Dateien unter [Sync/](schreibwerkstatt-focuseditor/Sync/). Kern ist die `@M
 
 Getrieben von Scene-Phase (`setActive(_:)`) + Reachability:
 
-- `setActive(true)` → sofortiger `requestSync()` + `startPolling()`. Hintergrund → `stopPolling()`.
-- `startPolling()` läuft `Task.sleep(for: interval)` in Schleife; `interval` aus `pollMode` ([SyncPreferences.swift](schreibwerkstatt-focuseditor/Sync/SyncPreferences.swift): `.active` ~5 s / `.relaxed` ~30 s / `.manual` = nil).
+- `setActive(true)` → sofortiger `requestSync()` + `startPolling()`. Hintergrund → Draft flushen + sofortiger Tick, dann `startPolling()` im Hintergrund-Takt.
+- `startPolling()` läuft `Task.sleep(for: interval)` in Schleife; `interval` aus [SyncCadence.swift](schreibwerkstatt-focuseditor/Sync/SyncCadence.swift)`.interval(mode:isPaused:isActive:)`: aktiv der `pollMode` ([SyncPreferences.swift](schreibwerkstatt-focuseditor/Sync/SyncPreferences.swift): `.active` ~5 s / `.relaxed` ~30 s), im Hintergrund höchstens alle 60 s (`backgroundInterval`); `.manual`/pausiert = nil.
+- `noteLocalSave()` (aus `bridge.onSaveResult` bei Erfolg) → entprellter Tick nach 1,5 s (`saveSyncDelay`), damit ein Edit nicht bis zum nächsten Poll in der Outbox liegt. `pushBeforeQuit()` → bei vorhandener Outbox ein auf 4 s befristeter Durchlauf (`quitPushTimeout`). Beide still bei `.manual`/pausiert.
 - [Reachability.swift](schreibwerkstatt-focuseditor/Sync/Reachability.swift) (`NWPathMonitor`) → bei Online-Übergang sofort ein Tick.
-- `isRunning` verhindert parallele Ticks; `isPaused` (transient) und `pollMode` (persistiert) steuern UI/Verhalten.
+- `isRunning` verhindert parallele Ticks; ein abgewiesener Auto-Tick setzt `syncAgainAfterRun` und läuft nach dem Durchlauf. `isPaused` (transient) und `pollMode` (persistiert) steuern UI/Verhalten.
 
 Ein Tick macht Push, dann Pull, dann gedrosselt Delete-Reconcile (`reconcileInterval = 60 s`).
 
@@ -222,7 +223,8 @@ Ein Tick macht Push, dann Pull, dann gedrosselt Delete-Reconcile (`reconcileInte
 `resolveConflict` holt frisches Server-HTML (`GET /content/pages/:id`) und ruft `editor.merge3(base:local:server:)` (in der WebView, `block-merge.js`):
 
 - `base` = Merge-Ancestor aus dem LocalStore (`store.serverBaseHtml(id:)`, Spalte `page.serverBaseHtml`), `local` = Outbox-HTML, `server` = frisch geholt.
-- `conflictCount == 0` → gemergtes HTML mit neuer Basis erneut pushen (still), Store mergen, offene Seite reloaden.
+- `conflictCount == 0` → gemergtes HTML mit neuer Basis erneut pushen (still), Store mergen, offene Seite reloaden (`adoptMergedPush`).
+- **Kein Merge in der WebView möglich** (kein Editor, `merge3` wirft/Timeout) → `serverMergeFallback`: `PushRequest` mit `base_html` = Ancestor gegen die **alte** ISO-Basis (nur ein veralteter Stempel löst den Server-Merge aus; mit dem aktuellen schriebe der PUT blind über fremde Änderungen). `200` (`merged: true`, `html` = gemergter Stand) → `adoptMergedPush` wie oben; `409` (Block-Kollision oder neues Rennen) → `recordConflict`; ohne Ancestor/ISO-Basis → `recordConflict`; transienter Fehler → kein klebriger Konflikt, nächster Tick.
 - `conflictCount > 0` → echter Konflikt: `recordConflict(...)` (→ `@Published conflicts`). Die Toolbar (`SyncStatusLabel`) zeigt sie und öffnet pro Seite die **`ConflictResolutionView`** ([Conflict/](schreibwerkstatt-focuseditor/Conflict/)): ein Sheet, das lokalen + frischen Server-Stand (`SyncEngine.conflictContents`) **nebeneinander** mit absatzweisem Diff (`ConflictDiff`, pure `CollectionDifference`) zeigt — informierte Wahl „mein Stand"/„Server-Stand" statt blindem Dropdown. Die Auflösung selbst macht weiter `resolveConflict(pageId:keepLocal:)` ([SyncEngine+Conflicts.swift](schreibwerkstatt-focuseditor/Sync/SyncEngine+Conflicts.swift)).
 - **Manuelle Auflösung betrifft nur die Kollisionen.** `resolveConflict(pageId:keepLocal:)` holt den frischen Server-Stand und rechnet denselben `merge3` (Ancestor, Outbox-HTML, Server-HTML). `_merge3` liefert dafür zwei Fassungen: `merged` (`mergedToHtml`: Kollisionen **lokal**) und `mergedRemote` (`buildResolvedHtml` mit jeder Kollisions-`bid` auf `'remote'`), dazu `remoteUnchanged` (= `mergedRemote` gleicht dem Server in Block-Normalform). „Mein Stand" pusht `merged`, „Server-Stand" pusht `mergedRemote`; ist `remoteUnchanged`, gibt es nichts Lokales ohne Kollision, und es bleibt beim `adoptServerState`. Absätze, die nur eine Seite geändert hat, überleben damit beide Knöpfe.
   - Nach dem PUT: Spiegel + Outbox per `applyMergedPush` (`queuedAt`-Guard), Ancestor = **tatsächlich gepushtes** HTML, offene Seite per `reloadOpenPageOrRevertBase` neu laden. Lehnt der Editor ab (inzwischen getippt) oder liegt schon ein neuer Save vor, wird `entry.html` der Ancestor und die ISO-Basis bleibt beim Vor-PUT-Stand → der nächste Push merged per 409 nur die jüngsten Zeichen ein.

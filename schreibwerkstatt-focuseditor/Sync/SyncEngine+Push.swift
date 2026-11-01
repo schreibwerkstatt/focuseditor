@@ -251,19 +251,25 @@ extension SyncEngine {
 
     /// 409-Auflösung per 3-Wege-Block-Merge in der WebView. Kollisionsfrei →
     /// gemergtes HTML mit der neuen Server-Basis erneut pushen; echte Block-
-    /// Kollision oder kein Merge möglich → Konflikt erfassen (Editor-UI/Block-Merge).
-    /// Verwirft NIE lokale Inhalte.
+    /// Kollision → Konflikt erfassen (Editor-UI/Block-Merge). Läuft der Merge in
+    /// der WebView nicht (kein Editor/Bundle, Zeitlimit), mergt der Server
+    /// (`serverMergeFallback`). Verwirft NIE lokale Inhalte.
     func resolveConflict(entry: OutboxEntry, conflict c: ConflictBody?) async {
         let pid = entry.pageId
+        // Merge-Ancestor der Seite (Spalte im Store; `nil` = keiner bekannt → der
+        // Merge kann nur 2-Wege und landet in der Konflikt-UI).
+        let base = (try? await store.serverBaseHtml(id: pid)) ?? nil
 
-        // Kein WebView/Editor-Bundle → nicht auto-mergebar, echter Konflikt für die UI.
+        // Weder WebView-Merge (kein Editor) noch Server-Merge (kein Ancestor bzw.
+        // keine Basis) möglich → echter Konflikt für die UI, ohne Roundtrip.
         // Ausser es gibt eigene unbestätigte Pushs: dann erst nachsehen, ob der
         // Server-Stand einer davon ist (Sicherheitsnetz unten, braucht keinen Editor).
-        if editor == nil && entry.sentUnconfirmedIds.isEmpty {
+        if editor == nil && entry.sentUnconfirmedIds.isEmpty
+            && (base == nil || stateStore.state.serverBaseISO[pid] == nil) {
             await recordConflict(pageId: pid,
                                  serverUpdatedAt: c?.server_updated_at,
                                  serverEditorName: c?.server_editor_name)
-            log.notice("Konflikt \(pid, privacy: .public): kein Editor zum Mergen")
+            log.notice("Konflikt \(pid, privacy: .public): kein Editor und kein Ancestor zum Mergen")
             return
         }
 
@@ -298,32 +304,22 @@ extension SyncEngine {
             return
         }
 
+        let serverHtml = serverPage.html ?? ""
         guard let editor else {
-            await recordConflict(pageId: pid,
-                                 serverUpdatedAt: serverPage.updated_at,
-                                 serverEditorName: c?.server_editor_name)
-            log.notice("Konflikt \(pid, privacy: .public): kein Editor zum Mergen")
+            await serverMergeFallback(entry: entry, base: base, conflict: c,
+                                      serverPage: serverPage, reason: "kein Editor")
             return
         }
-
-        let serverHtml = serverPage.html ?? ""
-        // Merge-Ancestor der Seite (Spalte im Store; `nil` = keiner bekannt → der
-        // Merge kann nur 2-Wege und landet in der Konflikt-UI).
-        let base = try? await store.serverBaseHtml(id: pid)
-
         let outcome: MergeOutcome
         do {
             outcome = try await editor.merge3(base: base, local: entry.html, server: serverHtml)
         } catch {
-            // Kein Editor-Bundle/WebView → nicht auto-mergebar, als Konflikt zur UI.
-            await recordConflict(pageId: pid,
-                                 serverUpdatedAt: serverPage.updated_at,
-                                 serverEditorName: c?.server_editor_name)
             // Ursache mitloggen: ein JS-Fehler im Merge (WebKit legt die Exception-
             // Meldung in den userInfo) sieht sonst genauso aus wie „kein Editor".
             let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String
                 ?? error.localizedDescription
-            log.notice("Block-Merge nicht verfügbar für \(pid, privacy: .public) — Konflikt offen: \(detail, privacy: .public)")
+            await serverMergeFallback(entry: entry, base: base, conflict: c,
+                                      serverPage: serverPage, reason: "Block-Merge nicht verfügbar: \(detail)")
             return
         }
 
@@ -346,42 +342,7 @@ extension SyncEngine {
                                    decode: PushResponse.self)
             }
             guard !isSuperseded else { return }
-            let ms = ISOTime.millis(resp.updated_at) ?? entry.queuedAt
-            let previous = await baseSnapshot(pid)
-            // Gemergten Stand lokal übernehmen + Outbox quittieren in EINER
-            // Transaktion — und nur, wenn der Outbox-Eintrag seit dem Lesen
-            // unverändert ist. Früher wurde die Seitenzeile VOR dieser Prüfung
-            // überschrieben: kam während des Merge ein Save, stand im Spiegel das
-            // Merge-Ergebnis ohne die jüngsten Zeichen, und das nächste Öffnen der
-            // Seite lud genau diesen Stand. Schlägt der Write fehl, Basis NICHT
-            // vorrücken: der nächste Tick merged idempotent erneut.
-            let quittiert: Bool
-            do {
-                quittiert = try await store.applyMergedPush(id: pid, html: outcome.merged,
-                                                            queuedAt: entry.queuedAt,
-                                                            serverUpdatedAtMillis: ms)
-            } catch {
-                log.error("Auto-Merge lokal persistieren fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public) — Basis nicht vorgerückt, Retry beim nächsten Tick")
-                return
-            }
-            guard quittiert else {
-                // Save während des Merge-PUT → Seitenzeile + neuer Outbox-Eintrag
-                // bleiben unangetastet. Der neue Eintrag schreibt `entry.html` fort,
-                // nicht das Merge-Ergebnis — darum wird `entry.html` sein Ancestor,
-                // während die ISO-Basis bewusst ALT bleibt: der nächste Push läuft
-                // so in ein 409 und merged nur noch die jüngsten Zeichen gegen den
-                // (bereits gemergten) Server-Stand, statt ihn zu überschreiben.
-                try? await store.setServerBaseHtml(entry.html, id: pid)
-                log.notice("Auto-Merge: Save während PUT — Ancestor fortgeschrieben, Retry: \(pid, privacy: .public)")
-                return
-            }
-            autoMergeRe409[pid] = nil   // erfolgreich konvergiert → Re-Zähler zurücksetzen
-            try? await store.setServerBaseHtml(outcome.merged, id: pid)
-            stateStore.mutate { $0.serverBaseISO[pid] = resp.updated_at }
-            clearConflict(pageId: pid)
-            // Offene, saubere Seite still mit dem Merge-Ergebnis aktualisieren
-            // (lehnt der Editor ab, wird die Basis zurückgedreht).
-            await reloadOpenPageOrRevertBase(pid, html: outcome.merged, ms: ms, previous: previous)
+            await adoptMergedPush(entry: entry, mergedHtml: outcome.merged, resp: resp)
             log.info("Auto-Merge gepusht: \(pid, privacy: .public)")
         } catch let AuthError.server(status, _, _) where status == 409 {
             // Erneutes Rennen. Begrenzt oft still neu versuchen; danach als
@@ -401,6 +362,87 @@ extension SyncEngine {
         } catch {
             log.error("Auto-Merge-Push fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Rückfall, wenn der Block-Merge in der WebView nicht läuft (kein Editor, kein
+    /// Bundle, Zeitlimit): der Server mergt selbst — `PUT` mit `base_html`
+    /// (Ancestor) gegen die ALTE Basis. Nur ein veralteter Stempel löst den
+    /// Server-Merge aus; mit dem aktuellen schriebe der PUT den lokalen Stand
+    /// blind über die fremden Änderungen. Kollisionsfrei → 200 mit `merged` und
+    /// dem gemergten `html`; echte Block-Kollision → 409, Konflikt-UI wie bisher.
+    /// Ohne Ancestor bleibt nur die Konflikt-UI. Ein transienter Fehler setzt
+    /// keinen klebrigen Konflikt — der nächste Tick läuft erneut hierher.
+    private func serverMergeFallback(entry: OutboxEntry, base: String?, conflict c: ConflictBody?,
+                                     serverPage: PushResponse, reason: String) async {
+        let pid = entry.pageId
+        guard let base, let oldISO = stateStore.state.serverBaseISO[pid] else {
+            await recordConflict(pageId: pid,
+                                 serverUpdatedAt: serverPage.updated_at,
+                                 serverEditorName: c?.server_editor_name)
+            log.notice("Konflikt \(pid, privacy: .public): \(reason, privacy: .public), kein Ancestor für den Server-Merge")
+            return
+        }
+        let req = PushRequest(html: entry.html, expected_updated_at: oldISO, base_html: base)
+        do {
+            let resp = try await reachableSend {
+                try await api.send("/content/pages/\(pid)",
+                                   method: .PUT,
+                                   body: req,
+                                   decode: PushResponse.self)
+            }
+            guard !isSuperseded else { return }
+            await adoptMergedPush(entry: entry, mergedHtml: resp.html ?? entry.html, resp: resp)
+            log.info("Server-Merge übernommen (\(reason, privacy: .public)): \(pid, privacy: .public)")
+        } catch let AuthError.server(status, _, _) where status == 409 {
+            await recordConflict(pageId: pid,
+                                 serverUpdatedAt: serverPage.updated_at,
+                                 serverEditorName: c?.server_editor_name)
+            log.notice("Server-Merge \(pid, privacy: .public): Block-Kollision oder erneutes Rennen — Konflikt offen")
+        } catch {
+            log.error("Server-Merge-Push fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Gemergten Stand eines erfolgreichen Merge-Pushs übernehmen (Merge in der
+    /// WebView oder auf dem Server): Seitenzeile + Outbox, Basis, offene Seite.
+    private func adoptMergedPush(entry: OutboxEntry, mergedHtml: String, resp: PushResponse) async {
+        let pid = entry.pageId
+        let ms = ISOTime.millis(resp.updated_at) ?? entry.queuedAt
+        let previous = await baseSnapshot(pid)
+        // Gemergten Stand lokal übernehmen + Outbox quittieren in EINER
+        // Transaktion — und nur, wenn der Outbox-Eintrag seit dem Lesen
+        // unverändert ist. Früher wurde die Seitenzeile VOR dieser Prüfung
+        // überschrieben: kam während des Merge ein Save, stand im Spiegel das
+        // Merge-Ergebnis ohne die jüngsten Zeichen, und das nächste Öffnen der
+        // Seite lud genau diesen Stand. Schlägt der Write fehl, Basis NICHT
+        // vorrücken: der nächste Tick merged idempotent erneut.
+        let quittiert: Bool
+        do {
+            quittiert = try await store.applyMergedPush(id: pid, html: mergedHtml,
+                                                        queuedAt: entry.queuedAt,
+                                                        serverUpdatedAtMillis: ms)
+        } catch {
+            log.error("Auto-Merge lokal persistieren fehlgeschlagen \(pid, privacy: .public): \(error.localizedDescription, privacy: .public) — Basis nicht vorgerückt, Retry beim nächsten Tick")
+            return
+        }
+        guard quittiert else {
+            // Save während des Merge-PUT → Seitenzeile + neuer Outbox-Eintrag
+            // bleiben unangetastet. Der neue Eintrag schreibt `entry.html` fort,
+            // nicht das Merge-Ergebnis — darum wird `entry.html` sein Ancestor,
+            // während die ISO-Basis bewusst ALT bleibt: der nächste Push läuft
+            // so in ein 409 und merged nur noch die jüngsten Zeichen gegen den
+            // (bereits gemergten) Server-Stand, statt ihn zu überschreiben.
+            try? await store.setServerBaseHtml(entry.html, id: pid)
+            log.notice("Auto-Merge: Save während PUT — Ancestor fortgeschrieben, Retry: \(pid, privacy: .public)")
+            return
+        }
+        autoMergeRe409[pid] = nil   // erfolgreich konvergiert → Re-Zähler zurücksetzen
+        try? await store.setServerBaseHtml(mergedHtml, id: pid)
+        stateStore.mutate { $0.serverBaseISO[pid] = resp.updated_at }
+        clearConflict(pageId: pid)
+        // Offene, saubere Seite still mit dem Merge-Ergebnis aktualisieren
+        // (lehnt der Editor ab, wird die Basis zurückgedreht).
+        await reloadOpenPageOrRevertBase(pid, html: mergedHtml, ms: ms, previous: previous)
     }
 
     /// Sicherheitsnetz-Push aus `resolveConflict`: der Server hält einen eigenen

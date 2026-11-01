@@ -300,8 +300,22 @@ final class ContractFixtureTests: XCTestCase {
             XCTAssertTrue(schemaKeys.contains(key) || fixtureKeys.contains(key),
                           "PushRequest sendet `\(key)`, der Vertrag kennt es nicht")
         }
-        // Der Mac mergt selbst (merge3) — `base_html` schickt er bewusst nicht.
+        // Der reguläre Push mergt selbst (merge3) und schickt `base_html` nicht —
+        // nur der Rückfall `serverMergeFallback` (s. nächsten Test).
         XCTAssertNil(sent["base_html"])
+    }
+
+    /// Der Rückfall ohne WebView-Merge schickt `base_html` — auch das muss der
+    /// Vertrag kennen, sonst mergte der Server nicht und der Push liefe ins 409.
+    func testServerMergeFallbackKeyIsInTheContract() throws {
+        let req = PushRequest(html: "<p data-bid=\"b1\">x</p>",
+                              expected_updated_at: "2026-01-01T00:00:00.000Z",
+                              base_html: "<p data-bid=\"b1\">alt</p>")
+        let encoded = try APIClient.makeEncoder().encode(req)
+        let sent = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(sent["base_html"] as? String, "<p data-bid=\"b1\">alt</p>")
+        let schemaKeys = try openAPIRequestProperties(path: "/content/pages/{page_id}", method: "put")
+        XCTAssertTrue(schemaKeys.contains("base_html"), "openapi.json kennt `base_html` am Push nicht")
     }
 
     // MARK: - Laden
