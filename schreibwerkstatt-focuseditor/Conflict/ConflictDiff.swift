@@ -32,8 +32,17 @@ enum ConflictText {
         "</li>", "</blockquote>", "</div>", "</pre>",
     ]
 
+    /// Sichtbarer Platzhalter für eine Trennlinie (`<hr>`). Ohne ihn fiele die
+    /// Linie beim Tag-Strippen spurlos weg — ein Konflikt, der nur eine Linie
+    /// einfügt oder entfernt, sähe in beiden Spalten identisch aus. Typografisches
+    /// Zeichen (Szenentrenner), kein Wort → nicht lokalisiert.
+    static let ruleMarker = "* * *"
+
     static func paragraphs(fromHTML html: String) -> [String] {
-        var s = html
+        // `<hr>` trägt Attribute (`data-bid`, …) und ist leer → als eigener Absatz
+        // VOR dem Tag-Strippen einsetzen; die Zeilenumbrüche machen ihn zur Grenze.
+        var s = html.replacingOccurrences(of: "<hr\\b[^>]*>", with: "\n\(ruleMarker)\n",
+                                          options: [.regularExpression, .caseInsensitive])
         for br in ["<br>", "<br/>", "<br />"] {
             s = s.replacingOccurrences(of: br, with: "\n", options: .caseInsensitive)
         }

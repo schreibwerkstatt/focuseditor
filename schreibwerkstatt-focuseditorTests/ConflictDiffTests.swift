@@ -33,6 +33,25 @@ final class ConflictDiffTests: XCTestCase {
         XCTAssertEqual(ConflictText.paragraphs(fromHTML: html), ["Zeile eins", "Zeile zwei"])
     }
 
+    func testParagraphsKeepsHorizontalRuleAsMarker() {
+        let html = "<p>Vorher.</p><hr data-bid=\"b2\"><p>Nachher.</p><HR/>"
+        XCTAssertEqual(ConflictText.paragraphs(fromHTML: html),
+                       ["Vorher.", ConflictText.ruleMarker, "Nachher.", ConflictText.ruleMarker])
+    }
+
+    func testRuleOnlyDifferenceIsVisible() {
+        let local = ConflictText.paragraphs(fromHTML: "<p>A</p><hr><p>B</p>")
+        let server = ConflictText.paragraphs(fromHTML: "<p>A</p><p>B</p>")
+        let result = ConflictDiff.compare(local: local, server: server)
+        XCTAssertEqual(result.local.filter(\.changed).map(\.text), [ConflictText.ruleMarker])
+        XCTAssertTrue(result.server.allSatisfy { !$0.changed })
+    }
+
+    func testHrPrefixedTagIsNotARule() {
+        // `<hrx>` o. Ä. ist keine Trennlinie (Wortgrenze im Muster).
+        XCTAssertEqual(ConflictText.paragraphs(fromHTML: "<p>a<hrx>b</p>"), ["ab"])
+    }
+
     // MARK: - Diff-Klassifikation
 
     func testCompareMarksOnlyDifferingParagraphs() {

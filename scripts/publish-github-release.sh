@@ -64,11 +64,20 @@ echo "==> Asset:   $DMG_PATH"
 # --- gh-Login pruefen ---------------------------------------------------------
 gh auth status >/dev/null 2>&1 || { echo "FEHLER: 'gh' nicht eingeloggt (gh auth login)." >&2; exit 1; }
 
-# --- Existiert der Tag bereits? -> sauber abbrechen mit Hinweis ---------------
+# --- Existiert der Release bereits? ------------------------------------------
+# Ein App-Store-Release (/release appstore) legt den Release OHNE Assets und
+# mit --latest=false an. Wird das DMG fuer dieselbe Version nachgezogen, wird
+# dieser Release ergaenzt (Assets hoch, dann zum "latest" gemacht). Traegt er
+# schon ein .dmg, ist es ein echtes Duplikat -> abbrechen.
+EXISTING_RELEASE=0
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-  echo "FEHLER: Release '$TAG' existiert bereits." >&2
-  echo "        MARKETING_VERSION im Xcode-Projekt erhoehen oder VERSION=… setzen." >&2
-  exit 1
+  if gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep -q '\.dmg$'; then
+    echo "FEHLER: Release '$TAG' existiert bereits (mit .dmg)." >&2
+    echo "        MARKETING_VERSION im Xcode-Projekt erhoehen oder VERSION=… setzen." >&2
+    exit 1
+  fi
+  EXISTING_RELEASE=1
+  echo "==> Release '$TAG' existiert ohne .dmg (App-Store-Release) — wird ergaenzt."
 fi
 
 # --- Release anlegen + Asset hochladen ---------------------------------------
@@ -104,12 +113,20 @@ if [[ -n "${NOTES:-}" ]]; then
   NOTES_ARGS=(--notes "$NOTES")
 fi
 
-echo "==> Lege GitHub-Release an + lade Assets hoch (.dmg + appcast.xml)..."
-gh release create "$TAG" "$TMP_ASSET" "$APPCAST_PATH" \
-  --repo "$REPO" \
-  --title "Focuseditor $VERSION" \
-  --latest \
-  "${NOTES_ARGS[@]}"
+if [[ "$EXISTING_RELEASE" == 1 ]]; then
+  # Erst die Assets, DANN "latest" — sonst zeigte releases/latest kurz auf
+  # einen Release ohne appcast.xml/.dmg (Sparkle + Server-Download ins Leere).
+  echo "==> Lade Assets in bestehenden Release hoch (.dmg + appcast.xml)..."
+  gh release upload "$TAG" "$TMP_ASSET" "$APPCAST_PATH" --repo "$REPO"
+  gh release edit "$TAG" --repo "$REPO" --title "Focuseditor $VERSION" --latest
+else
+  echo "==> Lege GitHub-Release an + lade Assets hoch (.dmg + appcast.xml)..."
+  gh release create "$TAG" "$TMP_ASSET" "$APPCAST_PATH" \
+    --repo "$REPO" \
+    --title "Focuseditor $VERSION" \
+    --latest \
+    "${NOTES_ARGS[@]}"
+fi
 
 echo
 echo "==> Fertig. Release veroeffentlicht:"

@@ -19,6 +19,40 @@ Zwei Regeln, damit der Text stimmt:
 Die Erstversion braucht keinen Text — Apple zeigt „Neue Funktionen“ erst ab dem
 ersten Update und lässt das Feld dort leer.
 
+## 3.30 · Deutsch (max. 4000)
+
+```
+• Mehr Schutz für deine letzten Anschläge: Wählst du im Abschnitts-Picker den bereits offenen Abschnitt erneut, gehen die zuletzt getippten Zeichen nicht mehr verloren, und eine Änderung von einem anderen Gerät wird nicht mehr eingespielt, während du gerade tippst
+• Stürzt die Schreibfläche einmal ab, startet der Editor von selbst neu, statt leer stehenzubleiben
+• „Editor-Cache leeren“ und „Lokalen Spiegel zurücksetzen“ sichern vorher deinen Text; das Zurücksetzen gleicht zuerst ab und nennt die Abschnitte, die noch nicht auf dem Server sind
+• Abschnitts-Picker: ⌘⌫ löscht den gewählten Abschnitt (mit Rückfrage), ⎋ bringt dich zurück in die Schreibfläche, ⏎ funktioniert auch mit Eingabemethoden für andere Schriften; mit VoiceOver lassen sich Abschnitte direkt umbenennen und löschen
+• ⌘N legt einen Abschnitt nicht mehr versehentlich doppelt an; Fehler beim Löschen erscheinen als Hinweis über der Schreibfläche
+• ⌘B, ⌘I und ⌘U wirken jetzt auch in Suchfeldern und Dialogen dort, wo der Cursor steht
+• Die Synonym-Hilfe lässt sich ohne Neustart ein- und ausschalten
+• Frühere Fassungen: mit Tastatur und VoiceOver bedienbar, „Erneut versuchen“ nach einem Fehler, Datumsangaben in der App-Sprache
+• Konflikt-Fenster: Trennlinien (Szenenwechsel) sind jetzt sichtbar; „Server-Stand“ lässt sich erst wählen, wenn der Vergleich geladen ist
+• Abmelden fragt vorher nach; das Lektorat lässt sich jederzeit abbrechen
+• Bessere Lesbarkeit: kräftigere Kontraste bei Hinweisen, im leeren Zustand und im Abschnitts-Picker
+• Mehr Sicherheit: eingefügte Bilder von fremden Webseiten werden in der Schreibfläche nicht mehr nachgeladen (sie bleiben im Text erhalten)
+```
+
+## 3.30 · English (max 4000)
+
+```
+• Better protection for your last keystrokes: choosing the already open section again in the section picker no longer loses what you just typed, and a change from another device is no longer applied while you are typing
+• If the writing area ever crashes, the editor restarts on its own instead of staying blank
+• “Clear editor cache” and “Reset local mirror” save your text first; resetting syncs beforehand and lists the sections not yet on the server
+• Section picker: ⌘⌫ deletes the selected section (after asking), ⎋ takes you back to the writing area, ⏎ also works with input methods for other scripts; with VoiceOver you can rename and delete sections directly
+• ⌘N no longer creates a section twice by accident; errors while deleting appear as a notice above the writing area
+• ⌘B, ⌘I and ⌘U now also work in search fields and dialogs, wherever the cursor is
+• Synonym help can be switched on and off without restarting
+• Earlier versions: usable with keyboard and VoiceOver, “Try again” after an error, dates in the app language
+• Conflict window: horizontal rules (scene breaks) are now visible; “Server version” can only be chosen once the comparison has loaded
+• Signing out asks for confirmation first; proofreading can be cancelled at any time
+• Easier to read: stronger contrast for notices, the empty state and the section picker
+• More secure: images pasted from other websites are no longer loaded in the writing area (they stay in your text)
+```
+
 ## 3.29 · Deutsch (max. 4000)
 
 ```
