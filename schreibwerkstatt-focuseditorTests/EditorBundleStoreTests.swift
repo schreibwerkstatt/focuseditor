@@ -289,6 +289,43 @@ final class EditorBundleStoreTests: XCTestCase {
         XCTAssertFalse(store.hasCache)
     }
 
+    // MARK: - Manifest ist Pflicht
+
+    /// Ohne bzw. mit unlesbarem Manifest fehlten Major-Prüfung und CSS — und mit
+    /// gespeicherter ETag hielte jeder weitere Start das Bundle per 304 fest.
+    func testBundleWithoutManifestIsRejected() async {
+        let zip = ZipFixture.build([
+            .init(name: "js/editor/focus.js", data: Data("export const x = 1;".utf8), method: 0),
+        ])
+        let store = makeStore([(200, zip, "\"e1\"")])
+        await store.refresh(silent: false)
+        guard case .failed = store.state else { return XCTFail("erwartet .failed, bekam \(store.state)") }
+        XCTAssertFalse(store.hasCache)
+    }
+
+    func testBundleWithUnreadableManifestIsRejected() async {
+        let zip = ZipFixture.build([
+            .init(name: "bundle-manifest.json", data: Data(#"{"editorApi":"2"}"#.utf8), method: 0),
+            .init(name: "js/editor/focus.js", data: Data("export const x = 1;".utf8), method: 0),
+        ])
+        let store = makeStore([(200, zip, "\"e1\"")])
+        await store.refresh(silent: false)
+        guard case .failed = store.state else { return XCTFail("erwartet .failed, bekam \(store.state)") }
+        XCTAssertFalse(store.hasCache)
+    }
+
+    func testBundleMissingAFileFromTheManifestIsRejected() async {
+        let manifest = #"{"sourceCommit":"x","jsFiles":["js/editor/focus.js"],"cssFiles":["css/fehlt.css"]}"#
+        let zip = ZipFixture.build([
+            .init(name: "bundle-manifest.json", data: Data(manifest.utf8), method: 0),
+            .init(name: "js/editor/focus.js", data: Data("export const x = 1;".utf8), method: 0),
+        ])
+        let store = makeStore([(200, zip, "\"e1\"")])
+        await store.refresh(silent: false)
+        guard case .failed = store.state else { return XCTFail("erwartet .failed, bekam \(store.state)") }
+        XCTAssertFalse(store.hasCache)
+    }
+
     // MARK: - Bundle-Vertrag (X-Editor-Api)
 
     /// Body der 409-Absage, wie der Server ihn schickt (contract/fixtures/

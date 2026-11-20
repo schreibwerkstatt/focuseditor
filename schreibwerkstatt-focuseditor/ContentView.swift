@@ -85,12 +85,13 @@ private struct EditorHostView: View {
     /// Export-Meldung (rein informativ), zuletzt „App-Update nötig" (der Editor
     /// läuft mit dem gecachten Bundle weiter).
     private enum Banner {
-        case saveError, lektorat, history, export, appUpdate
+        case saveError, pageDelete, lektorat, history, export, appUpdate
     }
 
     private func isVisible(_ banner: Banner) -> Bool {
         switch banner {
         case .saveError: return library.saveError != nil
+        case .pageDelete: return pageAdmin.deleteError != nil
         case .lektorat:
             switch lektorat.phase {
             case .done, .failed: return true
@@ -115,6 +116,16 @@ private struct EditorHostView: View {
         VStack(spacing: 8) {
             if let saveError = library.saveError {
                 SaveErrorBanner(message: saveError) { library.dismissSaveError() }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            // Löschen startet aus einem Alert, der sofort schliesst — ohne
+            // Banner sähe niemand, dass es fehlschlug (offline, Lektorats-Lock).
+            if let deleteError = pageAdmin.deleteError {
+                NoticeBanner(tone: .failure,
+                             icon: "trash.slash",
+                             title: t("pageadmin.delete.failedTitle"),
+                             message: deleteError,
+                             dismiss: { pageAdmin.dismissDeleteError() })
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             if isVisible(.lektorat) {
@@ -220,6 +231,7 @@ private struct EditorHostView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: library.saveError)
+        .animation(.easeOut(duration: 0.18), value: pageAdmin.deleteError)
         .animation(.easeOut(duration: 0.18), value: library.booksLoaded)
         .animation(.easeOut(duration: 0.18), value: isLektoratBannerVisible)
         .animation(.easeOut(duration: 0.18), value: library.historyNotice)
@@ -227,8 +239,15 @@ private struct EditorHostView: View {
         .animation(.easeOut(duration: 0.18), value: isVisible(.appUpdate))
         // Toolbar-Accessory nur zeigen, solange der Editor sichtbar ist (sonst
         // stünde im Login-/Ladezustand ein leerer Streifen in der Titelleiste).
-        .onAppear { windowChrome.setToolbarVisible(true) }
-        .onDisappear { windowChrome.setToolbarVisible(false) }
+        .onAppear {
+            windowChrome.setToolbarVisible(true)
+            toolbarUI.editorAvailable = true
+        }
+        .onDisappear {
+            windowChrome.setToolbarVisible(false)
+            toolbarUI.editorAvailable = false
+            toolbarUI.resetTransient()
+        }
         // Konflikt-Auflösung (Nebeneinander-Diff): aus dem Toolbar-Konfliktmenü
         // beschworen. `item:` bindet an die geprüfte Seite → ein Sheet je Konflikt.
         .sheet(item: $toolbarUI.inspectingConflict) { conflict in
@@ -318,7 +337,7 @@ private struct EmptyEditorView: View {
                         }
                     }
                     EmptyStateButton(title: t("empty.openPage"),
-                                     shortcut: "⌘O",
+                                     shortcut: Shortcuts.openPage.glyphs.joined(),
                                      prominent: library.lastOpenPageRow == nil,
                                      action: openPicker)
                 }
@@ -411,7 +430,7 @@ private struct EmptyStateButton: View {
                 if let shortcut {
                     Text(shortcut)
                         .font(BrandFont.sans(11))
-                        .foregroundStyle(prominent ? BrandColor.bg.opacity(0.7) : BrandColor.faint)
+                        .foregroundStyle(prominent ? BrandColor.bg.opacity(0.85) : BrandColor.subtle)
                 }
             }
             .foregroundStyle(prominent ? BrandColor.bg : BrandColor.muted)
@@ -441,7 +460,7 @@ private struct EmptyStateButton: View {
 
     private var background: Color {
         if prominent {
-            return hovering ? BrandColor.accent.opacity(0.85) : BrandColor.accent
+            return hovering ? BrandColor.accentFill.opacity(0.88) : BrandColor.accentFill
         }
         return hovering ? BrandColor.faint.opacity(0.25) : .clear
     }

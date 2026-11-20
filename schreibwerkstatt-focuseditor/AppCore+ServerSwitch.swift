@@ -95,6 +95,7 @@ extension AppCore {
     /// fremder Seitenstand bei gleicher Seiten-ID als Push durch. Die Bindung
     /// bleibt unvermerkt, damit der nächste Sign-in den Wechsel erneut versucht.
     private func rebindStoresToCurrentServer(context: String) async {
+        bridge.clearDeletedPages()
         do {
             try await store.switchToCurrentServer()
         } catch {

@@ -54,7 +54,7 @@ extension PagePickerOverlay {
                     // öffnen zu müssen (typisch bei einer vorab gebauten Gliederung).
                     Text(t("picker.emptyBadge"))
                         .font(BrandFont.sans(9, weight: .semibold))
-                        .foregroundStyle(BrandColor.faint)
+                        .foregroundStyle(BrandColor.subtle)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(BrandColor.faint.opacity(0.14),
@@ -66,7 +66,9 @@ extension PagePickerOverlay {
                     Text(metric)
                         .font(BrandFont.sans(10))
                         .monospacedDigit()
-                        .foregroundStyle(BrandColor.faint)
+                        // `subtle` statt `faint`: auf dem Material lag `faint`
+                        // bei ≈ 2:1 — für 10-pt-Zahlen nicht lesbar.
+                        .foregroundStyle(BrandColor.subtle)
                         .lineLimit(1)
                         .layoutPriority(1)
                 }
@@ -76,7 +78,7 @@ extension PagePickerOverlay {
                     Text(RelativeTime.string(for: updated))
                         .font(BrandFont.sans(10))
                         .monospacedDigit()
-                        .foregroundStyle(BrandColor.faint)
+                        .foregroundStyle(BrandColor.subtle)
                         .lineLimit(1)
                         .layoutPriority(1)
                 }
@@ -106,6 +108,14 @@ extension PagePickerOverlay {
         .accessibilityLabel(rowLabel(row))
         .accessibilityHint(t("picker.a11y.openHint"))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        // Dieselben Verwaltungsschritte wie im Kontextmenü, für VoiceOver
+        // (Aktionen-Rotor) — das Kontextmenü allein erreicht man dort schlecht.
+        .accessibilityAction(named: t("pageadmin.rename.menu")) {
+            closeAnd { toolbarUI.renamingPage = row }
+        }
+        .accessibilityAction(named: t("pageadmin.delete.menu")) {
+            closeAnd { toolbarUI.deletingPage = row }
+        }
         // Umbenennen/Löschen per Rechtsklick — die zwei Verwaltungsschritte, für
         // die man bisher in die Web-App wechseln musste. Bewusst NUR im
         // Kontextmenü: sie gehören nicht in die Sichtlinie beim Schreiben, und

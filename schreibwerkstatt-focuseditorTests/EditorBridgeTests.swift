@@ -365,6 +365,34 @@ final class EditorBridgeTests: XCTestCase {
         XCTAssertEqual(seen?.2, 0)
     }
 
+    /// Ein Save für eine gelöschte Seite wird verworfen — aber als FEHLER, nicht
+    /// als `nil`: der Glue nähme `nil` als gelungenen Save und meldete die Seite
+    /// als sauber, obwohl der Text nur noch im DOM liegt.
+    func testSaveForDeletedPageThrowsAndDoesNotPersist() async throws {
+        let (bridge, store) = makeBridge()
+        var saveResults: [String?] = []
+        bridge.onSaveResult = { saveResults.append($0) }
+        bridge.markPageDeleted("p1")
+        do {
+            _ = try await bridge.route(op: "save", params: ["pageId": "p1", "html": "<p>x</p>"])
+            XCTFail("Save einer gelöschten Seite muss werfen")
+        } catch {}
+        let page = try await store.page(id: "p1")
+        XCTAssertNil(page)
+        XCTAssertTrue(saveResults.isEmpty, "gewollter Verwurf ist kein Fall für den Warn-Banner")
+    }
+
+    /// Seiten-IDs gelten nur innerhalb eines Servers: nach dem Leeren (Rebind auf
+    /// einen anderen Server) speichert dieselbe ID wieder.
+    func testClearDeletedPagesAllowsSavesAgain() async throws {
+        let (bridge, store) = makeBridge()
+        bridge.markPageDeleted("p1")
+        bridge.clearDeletedPages()
+        _ = try await bridge.route(op: "save", params: ["pageId": "p1", "html": "<p>x</p>"])
+        let page = try await store.page(id: "p1")
+        XCTAssertNotNil(page)
+    }
+
     /// Eine kaputte ID gilt als „keine Seite offen" — sie darf nicht in den
     /// Boot-Restore-Merker geraten (sonst öffnete der Start dauerhaft Unsinn).
     func testEditorStateIgnoresMalformedPageId() async throws {

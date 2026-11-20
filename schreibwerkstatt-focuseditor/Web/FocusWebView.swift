@@ -15,6 +15,7 @@
 //
 
 import AppKit
+import os
 import SwiftUI
 import WebKit
 
@@ -67,6 +68,7 @@ struct FocusWebView: NSViewRepresentable {
         }
         Self.makeTransparent(webView)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.reload = { [self] webView in self.load(into: webView) }
         #if DEBUG
         if webView.responds(to: Selector(("setInspectable:"))) {
             webView.isInspectable = true   // Web-Inspector im Debug-Build
@@ -113,6 +115,31 @@ struct FocusWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         var bridge: EditorBridge?
         var schemeHandler: AppSchemeHandler?
+        /// Lädt Bundle bzw. Dev-Harness neu (gesetzt in `makeNSView`).
+        var reload: ((WKWebView) -> Void)?
+        /// Zeitpunkte der letzten Prozess-Abstürze — Deckel gegen eine
+        /// Neustart-Schleife, falls das Bundle den Prozess beim Boot selbst
+        /// zum Absturz bringt.
+        private var recentCrashes: [Date] = []
+
+        /// Der WebContent-Prozess ist abgestürzt oder wurde vom System beendet
+        /// (Speicherdruck). Die Schreibfläche ist dann leer, die Bridge hielte
+        /// aber weiter eine offene, evtl. dirty Seite fest — der Sync lüde sie
+        /// nie still neu, die Toolbar zeigte eine Seite, die es im Editor nicht
+        /// mehr gibt. Darum: Zustand zurücksetzen und neu booten (der Boot
+        /// öffnet die zuletzt offene Seite aus dem lokalen Spiegel wieder).
+        /// Verloren ist nur, was seit dem letzten Autosave nur im DOM lag.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            AppLog.bridge.error("WebContent-Prozess beendet — Editor wird neu geladen")
+            bridge?.applyEditorState(pageId: nil, dirty: false)
+            let now = Date()
+            recentCrashes = recentCrashes.filter { now.timeIntervalSince($0) < 60 } + [now]
+            guard recentCrashes.count <= 3 else {
+                AppLog.bridge.error("WebContent-Prozess stürzt wiederholt ab — kein weiterer Neustart")
+                return
+            }
+            reload?(webView)
+        }
 
         // HARTE REGEL: keine externen Navigationen. Nur lokale Schemes erlauben.
         //
@@ -126,7 +153,9 @@ struct FocusWebView: NSViewRepresentable {
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             let url = navigationAction.request.url
             let scheme = url?.scheme?.lowercased()
-            if scheme == AppScheme.scheme || scheme == "file" || scheme == "about" || scheme == nil {
+            // Kein `file`: die Dev-Harness läuft auf `about:` (loadHTMLString
+            // ohne baseURL), das Bundle auf dem eigenen Scheme.
+            if scheme == AppScheme.scheme || scheme == "about" || scheme == nil {
                 decisionHandler(.allow)
                 return
             }

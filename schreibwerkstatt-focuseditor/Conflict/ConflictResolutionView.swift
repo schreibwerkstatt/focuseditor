@@ -172,8 +172,18 @@ struct ConflictResolutionView: View {
                 .keyboardShortcut(.cancelAction)
             Spacer()
             if resolving { ProgressView().controlSize(.small) }
+            // Ohne geladenen Vergleich wüsste niemand, welche Absätze „Server
+            // übernehmen" ersetzt — dann bleibt nur der eigene Stand (der
+            // nichts Lokales verwirft) oder Abbrechen.
+            if state == .failed {
+                Text(t("conflict.keepServerNeedsCompare"))
+                    .font(BrandFont.sans(11))
+                    .foregroundStyle(BrandColor.muted)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button(t("conflict.keepServer")) { resolve(keepLocal: false) }
-                .disabled(resolving || state == .loading)
+                .disabled(resolving || state == .loading || state == .failed)
             Button(t("conflict.keepLocal")) { resolve(keepLocal: true) }
                 .keyboardShortcut(.defaultAction)
                 .disabled(resolving || state == .loading)

@@ -15,9 +15,11 @@
 //  generierten HTML und lässt `node --check` darüberlaufen.
 //
 //  `node --check` parst nur (kein Ausführen, kein Netz, keine Module-Auflösung)
-//  — DOM-/Import-Referenzen stören also nicht. Fehlt `node`, wird der Test
-//  übersprungen statt rot: der Guard ist eine Entwickler-Bequemlichkeit, kein
-//  Release-Gate (Test-Bundles sind nicht sandboxed, `Process` ist hier erlaubt).
+//  — DOM-/Import-Referenzen stören also nicht. Fehlt `node`, prüft die
+//  JavaScriptCore-Shell `jsc` aus macOS (`checkModuleSyntax`/`checkScriptSyntax`,
+//  ebenfalls nur Parsen) — vorher übersprang sich der Guard auf Rechnern ohne
+//  node still, und der Glue blieb ungeprüft. Fehlen beide, wird übersprungen
+//  statt rot (Test-Bundles sind nicht sandboxed, `Process` ist hier erlaubt).
 //
 
 import XCTest
@@ -96,29 +98,69 @@ final class WebAssetsSyntaxTests: XCTestCase {
     /// Testausgabe — sie zeigt auf die Zeile IM BLOCK, nicht in der Swift-Datei.
     static func assertParses(_ source: String, module: Bool, label: String,
                              file: StaticString = #filePath, line: UInt = #line) throws {
-        let node = try nodeExecutable()
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("swk-glue-\(UUID().uuidString)")
+        let checker = try syntaxChecker()
+        let tmp = FileManager.default.temporaryDirectory
+        let url = tmp.appendingPathComponent("swk-glue-\(UUID().uuidString)")
             .appendingPathExtension(module ? "mjs" : "js")
         try source.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let proc = Process()
-        proc.executableURL = node
-        proc.arguments = ["--check", url.path]
-        let err = Pipe()
-        proc.standardError = err
-        proc.standardOutput = Pipe()
+        proc.executableURL = checker.executable
+        var driver: URL?
+        switch checker.kind {
+        case .node:
+            proc.arguments = ["--check", url.path]
+        case .jsc:
+            // Das Treiber-Skript lässt den SyntaxError bewusst ungefangen: nur
+            // eine ungefangene Exception setzt bei jsc einen Exit-Code ≠ 0
+            // (`quit(n)` ignoriert sein Argument — nachgemessen).
+            let script = tmp.appendingPathComponent("swk-jsc-\(UUID().uuidString).js")
+            try """
+                const src = readFile(arguments[0]);
+                if (arguments[1] === 'module') checkModuleSyntax(src); else checkScriptSyntax(src);
+                """.write(to: script, atomically: true, encoding: .utf8)
+            driver = script
+            proc.arguments = [script.path, "--", url.path, module ? "module" : "script"]
+        }
+        defer { if let driver { try? FileManager.default.removeItem(at: driver) } }
+        let out = Pipe()
+        proc.standardError = out
+        proc.standardOutput = out
         try proc.run()
-        // Vor dem `waitUntilExit` lesen: eine volllaufende Pipe würde node sonst
-        // blockieren (Syntaxfehler-Ausgaben sind mehrzeilig samt Code-Auszug).
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        // Vor dem `waitUntilExit` lesen: eine volllaufende Pipe würde den
+        // Prüfer sonst blockieren (Fehlerausgaben sind mehrzeilig).
+        let outData = out.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
 
         XCTAssertEqual(proc.terminationStatus, 0, """
-            \(label): JavaScript parst nicht.
-            \(String(data: errData, encoding: .utf8) ?? "")
+            \(label): JavaScript parst nicht (\(checker.kind)).
+            \(String(data: outData, encoding: .utf8) ?? "")
             """, file: file, line: line)
+    }
+
+    enum CheckerKind { case node, jsc }
+
+    /// Bevorzugt `node`, sonst die `jsc`-Shell des Systems.
+    static func syntaxChecker() throws -> (kind: CheckerKind, executable: URL) {
+        if let node = try? nodeExecutable() { return (.node, node) }
+        let jsc = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        if FileManager.default.isExecutableFile(atPath: jsc) {
+            return (.jsc, URL(fileURLWithPath: jsc))
+        }
+        throw XCTSkip("weder node noch jsc gefunden — Syntax-Guard übersprungen")
+    }
+
+    /// Gegenprobe: der Prüfer muss einen echten Syntaxfehler auch melden —
+    /// sonst wäre ein grüner Lauf wertlos (jsc etwa endet ohne Treiber mit 0).
+    func testCheckerRejectsBrokenSource() throws {
+        let checker = try Self.syntaxChecker()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swk-glue-bad-\(UUID().uuidString).mjs")
+        try "export const x = { ;".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTExpectFailure("absichtlich kaputtes JS muss als Parse-Fehler auffallen (\(checker.kind))")
+        try Self.assertParses("export const x = { ;", module: true, label: "Gegenprobe")
     }
 
     /// `node` aus den üblichen Installationspfaden (Homebrew arm64/x86, System).

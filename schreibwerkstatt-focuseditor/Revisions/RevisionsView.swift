@@ -39,6 +39,12 @@ struct RevisionsView: View {
         }
         .frame(width: 720, height: 460)
         .background(BrandColor.bg)
+        // Auswahl kommt aus der List (Klick, ↑/↓, VoiceOver) — die Vorschau
+        // folgt ihr, egal auf welchem Weg sie sich bewegt.
+        .onChange(of: selected) { _, id in
+            guard let id else { return }
+            Task { await store.loadPreview(revisionId: id) }
+        }
         .alert(t("revisions.confirmTitle"), isPresented: confirmBinding) {
             Button(t("general.cancel"), role: .cancel) { confirmingRestore = nil }
             Button(t("revisions.restore")) {
@@ -79,8 +85,17 @@ struct RevisionsView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundStyle(BrandColor.warning)
+                        .accessibilityHidden(true)
                     Text(message).font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    // Offline-Fehler sind meist vorübergehend — ohne Knopf bliebe
+                    // nur Schliessen und erneut ⌘⇧R.
+                    if let pageId = store.pageId {
+                        Button(t("revisions.retry")) {
+                            Task { await store.load(pageId: pageId) }
+                        }
+                        .padding(.top, 4)
+                    }
                 }
                 .padding(24)
             }
@@ -97,16 +112,17 @@ struct RevisionsView: View {
         }
     }
 
+    /// Native Liste mit Auswahl: ↑/↓ und VoiceOver (Zeile = auswählbares
+    /// Element) kommen von AppKit, die Markierung im Systemkontrast — vorher
+    /// reagierten die Zeilen nur auf Mausklicks.
     private var list: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(store.revisions) { revision in
-                    RevisionRow(revision: revision, isSelected: selected == revision.id)
-                        .contentShape(Rectangle())
-                        .onTapGesture { select(revision) }
-                }
-            }
+        List(store.revisions, selection: $selected) { revision in
+            RevisionRow(revision: revision)
+                .tag(revision.id)
         }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .accessibilityLabel(t("revisions.title"))
     }
 
     @ViewBuilder
@@ -150,11 +166,6 @@ struct RevisionsView: View {
 
     // MARK: - Aktionen
 
-    private func select(_ revision: PageRevision) {
-        selected = revision.id
-        Task { await store.loadPreview(revisionId: revision.id) }
-    }
-
     private func restore(_ revision: PageRevision) {
         Task {
             if await store.restore(revisionId: revision.id) {
@@ -179,7 +190,6 @@ struct RevisionsView: View {
 
 private struct RevisionRow: View {
     let revision: PageRevision
-    let isSelected: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -193,23 +203,31 @@ private struct RevisionRow: View {
                     .font(.callout)
                     .lineLimit(1)
             }
-            .foregroundStyle(isSelected ? Color.white : Color.primary)
             Text(detailLabel)
                 .font(.caption)
-                .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(isSelected ? BrandColor.primary : Color.clear)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
     private var timeLabel: String {
         guard let date = revision.createdAt else { return "—" }
+        return Self.formatter(for: L10nStore.shared.localeCode).string(from: date)
+    }
+
+    /// Datumsformat in der App-Sprache (nicht der Systemsprache) und nur einmal
+    /// je Sprache gebaut — vorher entstand pro Zeile und Render ein Formatter.
+    private static var formatters: [String: DateFormatter] = [:]
+    private static func formatter(for localeCode: String) -> DateFormatter {
+        if let cached = formatters[localeCode] { return cached }
         let f = DateFormatter()
+        f.locale = Locale(identifier: localeCode)
         f.dateStyle = .medium
         f.timeStyle = .short
-        return f.string(from: date)
+        formatters[localeCode] = f
+        return f
     }
 
     /// Umfang + Herkunft in einer Zeile. Die Zeichenzahl ist die Zahl, an der

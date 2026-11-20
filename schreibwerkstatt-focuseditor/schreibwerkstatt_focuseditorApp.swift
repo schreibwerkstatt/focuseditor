@@ -220,9 +220,7 @@ struct schreibwerkstatt_focuseditorApp: App {
                 // Abmelden im App-Menü (Konto-Aktion) — bisher nur im Toolbar-
                 // Überlauf. Eigene Sektion, damit es nicht mit „Über …" verschmilzt.
                 Divider()
-                Button(t("general.signOut")) {
-                    core.auth.signOut()
-                }
+                SignOutMenuItem(auth: core.auth)
             }
 
             // „Neu/Neues Fenster" ergibt für eine Ein-Seiten-Schreib-Shell keinen
@@ -262,7 +260,7 @@ struct schreibwerkstatt_focuseditorApp: App {
             // Menü fängt das Tastenkürzel vor der WebView ab, darum MUSS die Aktion
             // selbst formatieren). Eigene View für die reaktive „kein-Seite"-Sperre.
             CommandGroup(after: .pasteboard) {
-                FormatMenuCommands(library: core.library, bridge: core.bridge)
+                FormatMenuCommands(library: core.library, toolbarUI: toolbarUI, bridge: core.bridge)
             }
 
             // Alle „Darstellung/Editor"-Menüpunkte in EINER Gruppe (nach `.toolbar`):
@@ -377,21 +375,25 @@ private struct PageMenuCommands: View {
     var body: some View {
         // Neue Seite (⌘N) — braucht ein aktives Buch; das Anlegen selbst geht
         // an den Server (POST), s. PageAdminController.
+        // Alle Abschnitts-Befehle brauchen den Editor (`editorAvailable`): ihre
+        // Sheets hängen am Editor-Host. Ein bereits offenes Sheet sperrt ⌘N
+        // zusätzlich, sonst stapelte sich der nächste Dialog dahinter.
         Button(t("menu.newPage")) {
             toolbarUI.newPageOpen = true
         }
         .keyboardShortcut(Shortcuts.newPage)
-        .disabled(library.activeBookId == nil)
+        .disabled(!toolbarUI.editorAvailable || library.activeBookId == nil || sheetOpen)
 
         Button(t("menu.openPage")) {
             library.requestPicker()
         }
         .keyboardShortcut(Shortcuts.openPage)
+        .disabled(!toolbarUI.editorAvailable)
 
         Button(t("menu.closePage")) {
             library.closePage()
         }
-        .disabled(library.openPageId == nil)
+        .disabled(!toolbarUI.editorAvailable || library.openPageId == nil)
 
         Divider()
 
@@ -404,7 +406,7 @@ private struct PageMenuCommands: View {
             Task { await revisions.load(pageId: pageId) }
         }
         .keyboardShortcut(Shortcuts.revisions)
-        .disabled(library.openPageId == nil)
+        .disabled(!toolbarUI.editorAvailable || library.openPageId == nil || sheetOpen)
 
         Divider()
 
@@ -452,6 +454,40 @@ private struct PageMenuCommands: View {
     }
 }
 
+extension PageMenuCommands {
+    /// Ist schon ein Dialog über dem Editor offen?
+    fileprivate var sheetOpen: Bool {
+        toolbarUI.newPageOpen || toolbarUI.revisionsOpen
+            || toolbarUI.renamingPage != nil || toolbarUI.deletingPage != nil
+            || toolbarUI.inspectingConflict != nil
+    }
+}
+
+/// Abmelden im App-Menü: mit Rückfrage (wie in den Einstellungen) und nur
+/// aktiv, solange jemand angemeldet ist. Eigene View, damit die Sperre dem
+/// Auth-Zustand live folgt.
+private struct SignOutMenuItem: View {
+    @ObservedObject var auth: AuthStore
+
+    var body: some View {
+        Button(t("general.signOut")) { SignOutConfirmation.run(auth) }
+            .disabled(auth.state != .signedIn)
+    }
+}
+
+/// Hat die Schreibfläche den Tastaturfokus? Der First Responder ist beim Tippen
+/// im Editor die `WKWebView` selbst (nachgemessen); ein Textfeld meldet dagegen
+/// seinen Feld-Editor (`NSText`). Geteilt von Widerrufen und Format-Menü.
+@MainActor
+private func editorHasKeyboardFocus() -> Bool {
+    var responder = NSApp.keyWindow?.firstResponder
+    while let current = responder {
+        if current is WKWebView { return true }
+        responder = current.nextResponder
+    }
+    return false
+}
+
 /// Widerrufen/Wiederherstellen im Bearbeiten-Menü.
 ///
 /// Routet bewusst nach dem First Responder, statt stur in den Editor zu
@@ -477,23 +513,11 @@ private struct HistoryMenuCommands: View {
     }
 
     private func route(_ action: String, fallback selector: String) {
-        if editorHasFocus {
+        if editorHasKeyboardFocus() {
             Task { await bridge.applyHistory(action) }
         } else {
             NSApp.sendAction(Selector((selector)), to: nil, from: nil)
         }
-    }
-
-    /// Hat die Schreibfläche den Tastaturfokus? Der First Responder ist beim
-    /// Tippen im Editor die `WKWebView` selbst (nachgemessen); ein Textfeld
-    /// meldet dagegen seinen Feld-Editor (`NSText`).
-    private var editorHasFocus: Bool {
-        var responder = NSApp.keyWindow?.firstResponder
-        while let current = responder {
-            if current is WKWebView { return true }
-            responder = current.nextResponder
-        }
-        return false
     }
 }
 
@@ -503,24 +527,39 @@ private struct HistoryMenuCommands: View {
 /// nativen contenteditable-Shortcuts. Da das Menü das Tastenkürzel VOR der
 /// WebView abfängt, muss die Aktion selbst formatieren. `@ObservedObject library`
 /// nur für die reaktive Sperre, solange keine Seite offen ist.
+///
+/// Routet wie `HistoryMenuCommands` nach dem First Responder: liegt der Fokus
+/// nicht in der Schreibfläche (Suchfeld des Pickers, Einstellungen-Feld), geht
+/// die Aktion an AppKit statt an den Editor — sonst formatierte ⌘I im Suchfeld
+/// die letzte Auswahl im Manuskript dahinter und markierte den Abschnitt als
+/// geändert.
 private struct FormatMenuCommands: View {
     @ObservedObject var library: LibraryStore
+    @ObservedObject var toolbarUI: ToolbarUIState
     let bridge: EditorBridge
 
     var body: some View {
-        Button(t("menu.bold")) { apply("bold") }
+        Button(t("menu.bold")) { apply("bold", fallback: "toggleBoldface:") }
             .keyboardShortcut(Shortcuts.bold)
-            .disabled(library.openPageId == nil)
-        Button(t("menu.italic")) { apply("italic") }
+            .disabled(!enabled)
+        Button(t("menu.italic")) { apply("italic", fallback: "toggleItalics:") }
             .keyboardShortcut(Shortcuts.italic)
-            .disabled(library.openPageId == nil)
-        Button(t("menu.underline")) { apply("underline") }
+            .disabled(!enabled)
+        Button(t("menu.underline")) { apply("underline", fallback: "underline:") }
             .keyboardShortcut(Shortcuts.underline)
-            .disabled(library.openPageId == nil)
+            .disabled(!enabled)
     }
 
-    private func apply(_ command: String) {
-        Task { await bridge.applyFormat(command) }
+    private var enabled: Bool {
+        toolbarUI.editorAvailable && library.openPageId != nil
+    }
+
+    private func apply(_ command: String, fallback selector: String) {
+        if editorHasKeyboardFocus() {
+            Task { await bridge.applyFormat(command) }
+        } else {
+            NSApp.sendAction(Selector((selector)), to: nil, from: nil)
+        }
     }
 }
 

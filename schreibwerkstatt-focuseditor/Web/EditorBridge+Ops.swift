@@ -120,8 +120,12 @@ extension EditorBridge {
                                      allowEmpty: true)
         let base = optTimestamp(params, "baseUpdatedAt")
         guard !deletedPageIds.contains(pageId) else {
+            // Werfen statt `nil`: ein `nil` nähme der Glue als gelungenen Save
+            // und meldete die Seite als sauber — der Text läge dann nur noch im
+            // DOM. Bewusst OHNE `onSaveResult`: der verworfene Sicherungs-Save
+            // des Close-Handlers ist gewollt und kein Fall für den Warn-Banner.
             log.info("Save für gelöschte Seite verworfen: \(pageId, privacy: .public)")
-            return nil
+            throw BridgeError.pageDeleted(pageId)
         }
         do {
             // Vorher-Stand nur für die Änderungs-Meldung: `store.save` überspringt
@@ -162,7 +166,13 @@ extension EditorBridge {
     private func opLog(_ params: [String: Any]) {
         let level = (params["level"] as? String) == "error" ? OSLogType.error : .info
         let msg = Self.sanitizedLogMessage(params["message"])
+        // `console.*` der WebView kann Manuskript-Ausschnitte tragen (Fehler
+        // mit Textinhalt) — im Release darum privat, nur im Debug lesbar.
+        #if DEBUG
         log.log(level: level, "WebView: \(msg, privacy: .public)")
+        #else
+        log.log(level: level, "WebView: \(msg, privacy: .private)")
+        #endif
     }
 
     /// Editor meldet offene Seite + Dirty-Flag (für Open-Page-Reload/-Schutz).
@@ -177,8 +187,14 @@ extension EditorBridge {
     private func opEditorState(_ params: [String: Any]) {
         let pageId = optPageId(params, "pageId")
         let dirty = (params["dirty"] as? Bool) ?? false
+        let previous = openPageId
         applyEditorState(pageId: pageId, dirty: dirty)
-        guard let pageId else { return }
+        // Merker nur beim echten Seitenwechsel schreiben, nicht bei jedem
+        // Dirty-Wechsel derselben Seite. Nebenbei: der Flush vor einem
+        // Serverwechsel meldet die alte Seite noch einmal (dirty → sauber),
+        // während schon die URL des NEUEN Servers gilt — ohne diesen Guard
+        // landete ihre ID in dessen Recents/lastOpen-Merkern.
+        guard let pageId, pageId != previous else { return }
         UserDefaults.standard.set(pageId, forKey: Self.lastOpenPageKey)
         if let bookId = optBookId(params, "bookId") {
             Self.setLastOpenPageId(pageId, forBook: bookId)

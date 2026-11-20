@@ -377,6 +377,13 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    /// Tastatur-Fokus zurück in die Schreibfläche (nach dem Schliessen des
+    /// Pickers). Ohne offene Seite gibt es nichts zu beschreiben.
+    func focusEditor() {
+        guard openPageId != nil else { return }
+        bridge.focusWebView()
+    }
+
     /// Die Seite wurde am Server gelöscht: späte Saves dafür verwerfen und sie,
     /// falls offen, im Editor schliessen. VOR dem lokalen Löschen aufrufen —
     /// der Close-Handler des Editors sichert noch einmal, und dieser Save käme

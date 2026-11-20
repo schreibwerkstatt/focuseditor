@@ -61,6 +61,33 @@ final class MiniZipTests: XCTestCase {
         XCTAssertEqual(entries.first { $0.path == "js/app.js" }?.data, Data("let x=1".utf8))
     }
 
+    func testRejectsChecksumMismatch() {
+        let zip = ZipFixture.build([ZipFixture.FileSpec(name: "a.js", data: Data("x".utf8),
+                                                        method: 0, crcOverride: 0xDEAD_BEEF)])
+        XCTAssertThrowsError(try MiniZip.entries(in: zip)) { error in
+            guard case MiniZipError.checksumMismatch = error else {
+                return XCTFail("erwartet checksumMismatch, war \(error)")
+            }
+        }
+    }
+
+    func testRejectsEntryOverSizeLimitBeforeInflating() {
+        let payload = Data(repeating: 0x41, count: 2_000)
+        let zip = ZipFixture.build([ZipFixture.FileSpec(name: "big.js", data: payload, method: 8)])
+        let limits = MiniZip.Limits(maxEntries: 10, maxEntrySize: 1_000, maxTotalSize: 10_000)
+        XCTAssertThrowsError(try MiniZip.entries(in: zip, limits: limits)) { error in
+            guard case MiniZipError.tooLarge = error else {
+                return XCTFail("erwartet tooLarge, war \(error)")
+            }
+        }
+    }
+
+    func testRejectsTooManyEntries() {
+        let specs = (0..<3).map { ZipFixture.FileSpec(name: "f\($0).js", data: Data("x".utf8), method: 0) }
+        let limits = MiniZip.Limits(maxEntries: 2, maxEntrySize: 1_000, maxTotalSize: 10_000)
+        XCTAssertThrowsError(try MiniZip.entries(in: ZipFixture.build(specs), limits: limits))
+    }
+
     func testThrowsOnNonZipInput() {
         XCTAssertThrowsError(try MiniZip.entries(in: Data("überhaupt kein zip".utf8))) { error in
             guard case MiniZipError.notAZip = error else {

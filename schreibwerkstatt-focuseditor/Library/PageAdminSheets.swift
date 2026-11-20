@@ -72,6 +72,8 @@ struct NewPageSheet: View {
         .padding(20)
         .frame(width: 380)
         .background(BrandColor.bg)
+        // Ein Fehler aus einem früheren Dialog gehört nicht in diesen.
+        .onAppear { pageAdmin.dismissError() }
     }
 
     /// Kapitel des aktiven Buchs, in der Reihenfolge des Baums und ohne
@@ -135,7 +137,10 @@ struct RenamePageSheet: View {
         .padding(20)
         .frame(width: 380)
         .background(BrandColor.bg)
-        .onAppear { name = page.name }
+        .onAppear {
+            name = page.name
+            pageAdmin.dismissError()
+        }
     }
 
     private func rename() {

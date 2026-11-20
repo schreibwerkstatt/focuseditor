@@ -12,25 +12,47 @@
 //   • liest Größen/Offsets aus dem Central Directory (robust gegen
 //     Data-Descriptors, bei denen der Local-Header Nullgrößen trägt),
 //   • unterstützt „stored" (0) und „deflate" (8) — was JSZip erzeugt,
-//   • kein ZIP64 (Bundle ist klein; 0xFFFFFFFF-Marker → Fehler statt Fehlinterpret.).
+//   • kein ZIP64 (Bundle ist klein; 0xFFFFFFFF-Marker → Fehler statt Fehlinterpret.),
+//   • Deckel für Anzahl Einträge, Eintrags- und Gesamtgrösse (die Grössen aus
+//     dem Central Directory werden VOR der Allokation geprüft — sonst legte ein
+//     kaputtes ZIP bis zu 4 GiB je Eintrag an),
+//   • CRC-32 je Eintrag (ein auf dem Transport beschädigtes Bundle wird
+//     abgelehnt, statt mit kaputtem JS installiert und per ETag festgehalten).
+//
+//  `nonisolated`: läuft abseits des Main Threads (EditorBundleStore entpackt im
+//  Hintergrund, damit das Schreiben nicht stockt).
 //
 
 import Foundation
 import Compression
 
-enum MiniZipError: Error {
+nonisolated enum MiniZipError: Error {
     case notAZip                 // EOCD nicht gefunden
     case malformed(String)       // Header-/Offset-Inkonsistenz
     case unsupported(String)     // ZIP64 / unbekannte Kompression
     case inflateFailed(String)   // DEFLATE-Dekompression fehlgeschlagen
+    case tooLarge(String)        // Deckel überschritten (Anzahl/Grösse)
+    case checksumMismatch(String) // CRC-32 passt nicht
 }
 
-enum MiniZip {
+nonisolated enum MiniZip {
 
     /// Ein entpackter Eintrag: relativer POSIX-Pfad + roher Inhalt.
-    struct Entry {
+    struct Entry: Sendable {
         let path: String
         let data: Data
+    }
+
+    /// Obergrenzen gegen kaputte oder manipulierte Archive. Das echte Bundle
+    /// liegt weit darunter (wenige MB, einige hundert Dateien).
+    struct Limits: Sendable {
+        var maxEntries: Int
+        var maxEntrySize: Int
+        var maxTotalSize: Int
+
+        static let editorBundle = Limits(maxEntries: 5_000,
+                                         maxEntrySize: 16 * 1024 * 1024,
+                                         maxTotalSize: 96 * 1024 * 1024)
     }
 
     // ── Signaturen ───────────────────────────────────────────────────────────
@@ -40,7 +62,7 @@ enum MiniZip {
 
     /// Entpackt alle Dateieinträge eines ZIP-Puffers. Verzeichniseinträge
     /// (Pfad endet auf „/") werden übersprungen.
-    static func entries(in input: Data) throws -> [Entry] {
+    static func entries(in input: Data, limits: Limits = .editorBundle) throws -> [Entry] {
         // Auf startIndex 0 normalisieren: der Parser rechnet durchgängig mit
         // absoluten Offsets (Slices aus URLSession sind i. d. R. schon 0-basiert).
         let data = input.startIndex == 0 ? input : Data(input)
@@ -48,14 +70,19 @@ enum MiniZip {
         let total = readU16(data, eocd + 10)
         let cdOffset = Int(readU32(data, eocd + 16))
         guard cdOffset < data.count else { throw MiniZipError.malformed("CD-Offset außerhalb") }
+        guard Int(total) <= limits.maxEntries else {
+            throw MiniZipError.tooLarge("\(total) Einträge (max. \(limits.maxEntries))")
+        }
 
         var out: [Entry] = []
+        var totalSize = 0
         var p = cdOffset
         for _ in 0..<total {
             guard p + 46 <= data.count, readU32(data, p) == cdSig else {
                 throw MiniZipError.malformed("Central-Directory-Header erwartet @\(p)")
             }
             let method   = readU16(data, p + 10)
+            let crc      = readU32(data, p + 16)
             let compSize = readU32(data, p + 20)
             let rawSize  = readU32(data, p + 24)
             let nameLen  = Int(readU16(data, p + 28))
@@ -72,10 +99,21 @@ enum MiniZip {
             let name = String(decoding: data[nameRange], as: UTF8.self)
 
             if !name.hasSuffix("/") {
+                // Grössen VOR dem Entpacken prüfen (Allokation folgt rawSize).
+                guard Int(rawSize) <= limits.maxEntrySize else {
+                    throw MiniZipError.tooLarge("\(name): \(rawSize) Byte (max. \(limits.maxEntrySize))")
+                }
+                totalSize += Int(rawSize)
+                guard totalSize <= limits.maxTotalSize else {
+                    throw MiniZipError.tooLarge("Gesamtgrösse über \(limits.maxTotalSize) Byte")
+                }
                 let raw = try extractPayload(data, localHeaderOffset: lhOffset,
                                              method: method,
                                              compressedSize: Int(compSize),
                                              uncompressedSize: Int(rawSize))
+                guard CRC32.checksum(raw) == crc else {
+                    throw MiniZipError.checksumMismatch(name)
+                }
                 out.append(Entry(path: name, data: raw))
             }
 
@@ -106,6 +144,9 @@ enum MiniZip {
 
         switch method {
         case 0:  // stored
+            guard compressedSize == uncompressedSize else {
+                throw MiniZipError.malformed("stored: Grössen weichen ab")
+            }
             return comp
         case 8:  // deflate (raw, RFC 1951) — Apples COMPRESSION_ZLIB ist genau das
             return try inflate(comp, expectedSize: uncompressedSize)
@@ -165,5 +206,24 @@ enum MiniZip {
     private static func readU32(_ d: Data, _ o: Int) -> UInt32 {
         let b = d.startIndex + o
         return UInt32(d[b]) | (UInt32(d[b + 1]) << 8) | (UInt32(d[b + 2]) << 16) | (UInt32(d[b + 3]) << 24)
+    }
+}
+
+/// CRC-32 (IEEE 802.3, wie ZIP/zlib), tabellengestützt.
+nonisolated enum CRC32 {
+    private static let table: [UInt32] = (0..<256).map { i -> UInt32 in
+        var c = UInt32(i)
+        for _ in 0..<8 { c = (c & 1) != 0 ? 0xEDB8_8320 ^ (c >> 1) : c >> 1 }
+        return c
+    }
+
+    static func checksum(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        data.withUnsafeBytes { raw in
+            for byte in raw.bindMemory(to: UInt8.self) {
+                crc = table[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8)
+            }
+        }
+        return crc ^ 0xFFFF_FFFF
     }
 }

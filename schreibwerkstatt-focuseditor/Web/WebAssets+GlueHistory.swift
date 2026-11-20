@@ -24,17 +24,15 @@ extension WebAssets {
     /// Widerrufen / Wiederherstellen — Fragment des Boot-Moduls (s. Kopfdoku).
     static let glueHistoryJS = """
               // ── Widerrufen / Wiederherstellen (⌘Z / ⌘⇧Z) ────────────────────
-              // Widerrufen liefert das native macOS-Menü (Bearbeiten ▸
-              // Widerrufen) über WebKits Undo-Stack — hier wird nichts
-              // nachgebaut. Gemessen am echten Bundle ist dieser Stack aber
-              // GROB: WebKit fasst alles seit dem letzten Mausklick in EINEN
-              // Schritt zusammen (Pfeiltasten, Enter, Auto-Save, Fokuswechsel
-              // trennen nicht). Ein versehentliches ⌘Z entfernt damit unter
-              // Umständen den ganzen Schreib-Abschnitt — und der Auto-Save
-              // persistiert das still weiter.
+              // Die Historie führt der gebündelte Editor selbst (SSoT
+              // `shared/edit-history.js`, satzweise Schritte); das Menü löst sie
+              // über das `history`-Event aus (s. GlueEvents). WebKits eigener
+              // Stack ist GROB (alles seit dem letzten Mausklick ist EIN Schritt)
+              // und bleibt nur der Rückfall für ältere Bundles ohne Handle-API.
               //
-              // Darum meldet der Glue jedes History-Ereignis samt Umfang an
-              // Swift, das einen Hinweis mit dem Rückweg (⌘⇧Z) zeigt.
+              // Der Glue meldet jedes History-Ereignis samt Umfang an Swift, das
+              // ab einem grösseren Umfang einen Hinweis mit dem Rückweg (⌘⇧Z)
+              // zeigt.
               //
               // Zweites Thema hier: der Undo-Stack hängt an der WebView, nicht
               // am Inhalt — nach einem Seitenwechsel muss er geleert werden

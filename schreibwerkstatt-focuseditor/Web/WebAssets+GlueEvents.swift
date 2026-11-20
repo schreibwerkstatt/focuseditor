@@ -59,6 +59,26 @@ extension WebAssets {
                   && !reportedDirty && !(window.__standalone && window.__standalone.host
                     && window.__standalone.host.editDirty);
                 if (onlyIfClean && !stillClean()) return false;
+                // Picker wählt die SCHON offene Seite (z. B. aus „Zuletzt
+                // geöffnet"): nur sichern + fokussieren, NIE neu laden. Sonst
+                // spielte setPage den vor dem Sichern geladenen, älteren Stand
+                // ein — die Anschläge seit dem letzten Autosave verschwänden aus
+                // dem DOM, und der nächste Autosave überschriebe den neueren Stand.
+                if (save && currentPageId === pid) {
+                  for (let i = 0; i < 3; i++) {
+                    const before = inputSeq;
+                    try { await window.__standalone.save(); } catch (_) {}
+                    if (seq !== applySeq) return false;
+                    if (inputSeq === before) break;
+                  }
+                  hideEmpty();
+                  if (focus) {
+                    saveCaret(pid);
+                    const stored = caretByPage.get(pid);
+                    focusEditor(typeof stored === 'number' ? { caretOffset: stored } : undefined);
+                  }
+                  return true;
+                }
                 // Hatte die Schreibfläche gerade den Fokus? (für den stillen
                 // Server-Refresh: dann Caret in-place wiederherstellen, statt ihn
                 // beim setPage-DOM-Tausch lautlos wegspringen zu lassen.)
@@ -80,7 +100,7 @@ extension WebAssets {
                   }
                 }
                 // Caret der bisher offenen Seite merken (Session), BEVOR setPage
-                // den Content-Knoten austauscht.
+                // den Inhalt tauscht (derselbe Knoten, neues innerHTML).
                 saveCaret(currentPageId);
                 hideEmpty();   // wieder eine Seite offen → ruhige Leerfläche weg
                 bases.set(pid, page ? (page.updatedAt ?? null) : null);
@@ -224,11 +244,16 @@ extension WebAssets {
               // Der Tausch feuert kein `input`: die Zähler hier selbst anstossen.
               async function replaceOpenPage(pid, html) {
                 if (switchesInFlight !== 0 || currentPageId !== pid) return false;
+                // Wer während des Lade-Roundtrips tippt, behält seinen Stand —
+                // auch wenn genau dann der Autosave lief und der Editor sich
+                // darum für „unverändert seit dem Gesendeten" hielte.
+                const inputAtStart = inputSeq;
                 // Basis wie beim Laden (lokaler `updatedAt` aus dem Spiegel, den
                 // Swift vor diesem Aufruf schon auf den neuen Stand gesetzt hat).
                 let page = null;
                 try { page = await fb.load(pid); } catch (_) {}
                 if (switchesInFlight !== 0 || currentPageId !== pid) return false;
+                if (inputSeq !== inputAtStart) return false;
                 let ok = false;
                 try { ok = window.__standalone.replaceContent(html) === true; } catch (_) {}
                 if (!ok) return false;
@@ -236,9 +261,11 @@ extension WebAssets {
                 reportEditorState(pid, false);
                 resetTextLen();
                 try { window.__countStats && window.__countStats(); } catch (_) {}
-                // Rechtschreibung braucht keinen Anstoss: der Controller hängt am
-                // MutationObserver des Roots und prüft den getauschten Text selbst
-                // (in WebKit nachgemessen).
+                // Rechtschreibung anstossen (editor-api.d.ts, api 5: `refresh()`
+                // nach replaceContent ist zugesagt). Bisher verliess sich der Glue
+                // auf den internen MutationObserver des Controllers.
+                try { window.__spellcheck && typeof window.__spellcheck.refresh === 'function'
+                  && window.__spellcheck.refresh(); } catch (_) {}
                 return true;
               }
               // Seite schliessen (Buchwechsel ODER bewusst über die Toolbar):
@@ -265,6 +292,10 @@ extension WebAssets {
                 reportEditorState(null, false);
                 try { window.__countStats && window.__countStats(); } catch (_) {}
               });
+
+              // Ab hier hören die Seiten-Abos: ein vor dem Mount eingetroffenes
+              // openPage/closePage nachspielen (s. Facade `_markReady`).
+              try { fb._markReady && fb._markReady(); } catch (_) {}
 
         """
 }

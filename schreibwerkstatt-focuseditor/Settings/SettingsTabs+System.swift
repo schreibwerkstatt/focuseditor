@@ -119,6 +119,8 @@ struct AccountSettingsTab: View {
     @EnvironmentObject private var auth: AuthStore
     @EnvironmentObject private var editorBundle: EditorBundleStore
     @EnvironmentObject private var core: AppCore
+    /// Outbox-Stand für die Rückfrage zum Spiegel-Reset.
+    @EnvironmentObject private var sync: SyncEngine
     // Nur im DMG-Target — im App-Store-Build gibt es keinen Sparkle-Updater.
     #if SPARKLE
     @EnvironmentObject private var updater: UpdaterController
@@ -127,6 +129,8 @@ struct AccountSettingsTab: View {
     @State private var showLogoutAlert = false
     @State private var showClearCacheAlert = false
     @State private var showResetMirrorAlert = false
+    /// Vorlauf vor der Rückfrage zum Spiegel-Reset (Draft sichern + Sync).
+    @State private var preparingReset = false
 
     var body: some View {
         Form {
@@ -209,7 +213,9 @@ struct AccountSettingsTab: View {
 
                 HStack {
                     Spacer()
-                    Button(t("settings.account.resetMirror"), role: .destructive) { showResetMirrorAlert = true }
+                    if preparingReset { ProgressView().controlSize(.small) }
+                    Button(t("settings.account.resetMirror"), role: .destructive) { prepareResetMirror() }
+                        .disabled(preparingReset)
                 }
                 Text(t("settings.account.resetMirrorHint"))
                     .font(.caption)
@@ -252,7 +258,13 @@ struct AccountSettingsTab: View {
         .alert(t("settings.account.clearCacheAlertTitle"), isPresented: $showClearCacheAlert) {
             Button(t("general.cancel"), role: .cancel) {}
             Button(t("settings.account.clearAndReload"), role: .destructive) {
-                Task { await editorBundle.clearEditorCache() }
+                // Leeren baut die WebView ab — vorher den offenen Draft sichern
+                // („jeder Weg aus dem Editor flusht"; der `blur`-Flush beim
+                // Wechsel in die Einstellungen läuft nur asynchron).
+                Task {
+                    await core.bridge.flushDraftSave()
+                    await editorBundle.clearEditorCache()
+                }
             }
         } message: {
             Text(t("settings.account.clearCacheAlertMessage"))
@@ -263,7 +275,25 @@ struct AccountSettingsTab: View {
                 Task { await core.resetLocalMirror() }
             }
         } message: {
-            Text(t("settings.account.resetMirrorAlertMessage"))
+            if sync.pendingCount > 0 {
+                Text(t("settings.account.resetMirrorAlertMessage") + "\n\n"
+                     + tn(sync.pendingCount, "settings.account.resetMirrorPending"))
+            } else {
+                Text(t("settings.account.resetMirrorAlertMessage"))
+            }
+        }
+    }
+
+    /// Vor der Rückfrage: offenen Draft sichern und einen Sync versuchen. Was
+    /// danach noch in der Outbox liegt, ginge mit dem Reset verloren — die
+    /// Rückfrage nennt die Anzahl, statt pauschal zu warnen.
+    private func prepareResetMirror() {
+        preparingReset = true
+        Task {
+            await core.bridge.flushDraftSave()
+            await core.sync.syncNow(manual: true)
+            preparingReset = false
+            showResetMirrorAlert = true
         }
     }
 

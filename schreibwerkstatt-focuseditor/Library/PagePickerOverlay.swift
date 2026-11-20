@@ -373,5 +373,9 @@ struct PagePickerOverlay: View {
 
     func close() {
         isOpen = false
+        // Der Picker hat der WebView beim Öffnen den First Responder genommen
+        // (`focusSearchField`) — zurückgeben, sonst gingen die Anschläge nach
+        // ⎋ ins Leere.
+        library.focusEditor()
     }
 }

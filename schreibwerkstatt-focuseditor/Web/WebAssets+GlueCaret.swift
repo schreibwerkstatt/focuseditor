@@ -371,6 +371,13 @@ extension WebAssets {
               // aufgelöstem Modul-Promise bleibt das `await` ein Microtask.
               typewriterModule();
 
+              // Typografie VOR dem Mount anwenden: sonst rendert die erste Seite
+              // mit den Editor-Defaults und springt erst um, wenn der Pull im
+              // Typografie-Fragment greift — mitten in anchorCaretWhileSettling.
+              // `applyTypography` ist dort als Funktionsdeklaration definiert
+              // (im Block gehoisted); der spätere Pull bleibt als Nachzug.
+              try { applyTypography(await fb.editorTypography()); } catch (_) {}
+
               const mountOpts = { mount: document.getElementById('mount'), bridge };
               if (autosaveMs != null) mountOpts.autosaveMs = autosaveMs;
               window.__standalone = await mountStandaloneFocus(mountOpts);
@@ -409,8 +416,8 @@ extension WebAssets {
                 reportEditorState(null, false);
               }
               // Tastatureingaben markieren die offene Seite dirty (Datenverlust-
-              // Schutz im Sync). Listener am Mount-Container (überlebt setPage,
-              // das den Content-Knoten austauscht); 'input' bubbelt aus dem
+              // Schutz im Sync). Listener am Mount-Container (unabhängig vom
+              // Content-Knoten der Engine); 'input' bubbelt aus dem
               // contenteditable hoch.
               const mountEl = document.getElementById('mount');
               if (mountEl) mountEl.addEventListener('input', (e) => {
@@ -430,7 +437,7 @@ extension WebAssets {
               // Outbox-Eintrag und damit einen überflüssigen PUT.
               function flushIfDirty() {
                 if (!reportedDirty || !currentPageId) return;
-                try { fb._flushSave(); } catch (_) {}
+                try { Promise.resolve(fb._flushSave()).catch(() => {}); } catch (_) {}
               }
               window.addEventListener('blur', flushIfDirty);
               window.addEventListener('pagehide', flushIfDirty);

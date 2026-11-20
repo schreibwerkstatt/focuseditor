@@ -213,11 +213,11 @@ final class EditorBundleStore: ObservableObject {
             if hasCache {
                 // Live-Cache läuft → neues Bundle nur VORBEREITEN (pendingDir).
                 // Es wird beim nächsten Start aktiviert (kein Hot-Swap).
-                try installBundle(zip: res.data, etag: res.etag, into: pendingDir, metaURL: pendingMetaURL)
+                try await installBundle(zip: res.data, etag: res.etag, into: pendingDir, metaURL: pendingMetaURL)
                 state = .ready   // weiterhin der bestehende Live-Cache
             } else {
                 // Erst-Download (keine WebView liest noch) → direkt in den Cache.
-                try installBundle(zip: res.data, etag: res.etag, into: cacheDir, metaURL: metaURL)
+                try await installBundle(zip: res.data, etag: res.etag, into: cacheDir, metaURL: metaURL)
                 sourceCommit = loadMeta()?.sourceCommit
                 state = .ready
             }
@@ -293,46 +293,31 @@ final class EditorBundleStore: ObservableObject {
     /// Entpackt das ZIP in ein Staging-Verzeichnis, schreibt index.html aus dem
     /// Manifest und tauscht `target` (Live-Cache ODER pendingDir) atomar. Die
     /// zugehörige Meta (ETag/Commit) wird nach `metaURL` geschrieben.
-    private func installBundle(zip: Data, etag: String?, into target: URL, metaURL: URL) throws {
-        let entries = try MiniZip.entries(in: zip)
-        guard !entries.isEmpty else { throw MiniZipError.malformed("leeres Bundle") }
-
-        // Staging neben dem Ziel (gleicher Volume → atomarer Replace möglich).
-        let staging = target.deletingLastPathComponent()
-            .appendingPathComponent("web-cache.staging-\(UUID().uuidString)", isDirectory: true)
-        try? fileManager.removeItem(at: staging)
-        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
-        // Bricht das Entpacken/Schreiben unten ab, bleibt sonst ein halb gefüllter
-        // Staging-Ordner zurück. Nach erfolgreichem `swapIntoPlace` ist der Pfad
-        // bereits weg (replaceItemAt konsumiert ihn) → das removeItem ist dann ein
-        // harmloser No-op.
+    ///
+    /// Entpacken + Schreiben laufen abseits des Main Threads (`BundleStager`) —
+    /// der stille Hintergrund-Refresh liefe sonst mitten ins Tippen und liesse
+    /// die Oberfläche stocken. Nur der Tausch und die Meta bleiben hier.
+    private func installBundle(zip: Data, etag: String?, into target: URL, metaURL: URL) async throws {
+        let parent = target.deletingLastPathComponent()
+        let staged = try await Task.detached(priority: .utility) {
+            try BundleStager.stage(zip: zip, near: parent)
+        }.value
+        let staging = staged.staging
+        // Bricht unten etwas ab, bleibt sonst ein halb gefüllter Staging-Ordner
+        // zurück. Nach erfolgreichem `swapIntoPlace` ist der Pfad bereits weg
+        // (replaceItemAt konsumiert ihn) → das removeItem ist ein No-op.
         defer { try? fileManager.removeItem(at: staging) }
-
-        var manifest: BundleManifest?
-        for entry in entries {
-            // Path-Traversal-Schutz: nur Pfade innerhalb des Stagings.
-            let dst = staging.appendingPathComponent(entry.path).standardizedFileURL
-            guard dst.path == staging.path || dst.path.hasPrefix(staging.path + "/") else {
-                throw MiniZipError.malformed("Pfad-Ausbruch: \(entry.path)")
-            }
-            if entry.path == "bundle-manifest.json" {
-                manifest = try? JSONDecoder().decode(BundleManifest.self, from: entry.data)
-            }
-            try fileManager.createDirectory(at: dst.deletingLastPathComponent(),
-                                            withIntermediateDirectories: true)
-            try entry.data.write(to: dst)
-        }
 
         // Ein Bundle mit fremdem Major nicht installieren — die Bridge könnte es
         // nicht bedienen. Ohne Feld (Server vor der Versionierung) gilt Major 1.
-        if let major = manifest?.editorApi, !Self.supportedEditorApiMajors.contains(major) {
+        let manifest = staged.manifest
+        if let major = manifest.editorApi, !Self.supportedEditorApiMajors.contains(major) {
             throw ManifestEditorApiUnsupported(major: major)
         }
 
         // Client-eigenes index.html (Boot/Bridge) aus dem Manifest erzeugen.
-        let css = manifest?.cssFiles ?? []
-        let commit = manifest?.sourceCommit ?? "unknown"
-        let html = WebAssets.indexHTML(cssFiles: css, sourceCommit: commit)
+        let commit = manifest.sourceCommit ?? "unknown"
+        let html = WebAssets.indexHTML(cssFiles: manifest.cssFiles ?? [], sourceCommit: commit)
         try Data(html.utf8).write(to: staging.appendingPathComponent("index.html"))
 
         try swapIntoPlace(staging: staging, target: target)
@@ -394,7 +379,7 @@ final class EditorBundleStore: ObservableObject {
     // MARK: - Meta (ETag/Commit)
 
     /// `bundle-manifest.json` im ZIP (contract/editor-api.d.ts → `BundleManifest`).
-    struct BundleManifest: Decodable {
+    nonisolated struct BundleManifest: Decodable, Sendable {
         let sourceCommit: String?
         /// Major dieses Bundles; fehlt bei Servern vor der Versionierung.
         let editorApi: Int?
@@ -427,5 +412,77 @@ final class EditorBundleStore: ObservableObject {
 
     private static func describe(_ error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+    }
+}
+
+/// Entpackt ein Editor-Bundle in ein frisches Staging-Verzeichnis — abseits des
+/// Main Threads (aus `EditorBundleStore.installBundle` per `Task.detached`).
+nonisolated enum BundleStager {
+    struct Staged: Sendable {
+        let staging: URL
+        let manifest: EditorBundleStore.BundleManifest
+    }
+
+    enum StageError: LocalizedError {
+        case missingManifest
+        case invalidManifest(String)
+        case missingFile(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .missingManifest:          return "Editor-Bundle ohne bundle-manifest.json"
+            case .invalidManifest(let why): return "Editor-Bundle: Manifest unlesbar (\(why))"
+            case .missingFile(let path):    return "Editor-Bundle: im Manifest genannte Datei fehlt (\(path))"
+            }
+        }
+    }
+
+    /// Entpackt `zip` neben `parent` und prüft das Manifest. Das Manifest ist
+    /// Pflicht: ohne (oder mit unlesbarem) Manifest fehlten Major-Prüfung und
+    /// CSS — und weil die ETag mitgespeichert würde, hielte jeder weitere Start
+    /// das kaputte Bundle per 304 fest. Bei jedem Fehler wird das Staging
+    /// wieder entfernt.
+    static func stage(zip: Data, near parent: URL) throws -> Staged {
+        let fileManager = FileManager.default
+        let entries = try MiniZip.entries(in: zip)
+        guard !entries.isEmpty else { throw MiniZipError.malformed("leeres Bundle") }
+
+        // Staging neben dem Ziel (gleicher Volume → atomarer Replace möglich).
+        let staging = parent.appendingPathComponent("web-cache.staging-\(UUID().uuidString)",
+                                                    isDirectory: true)
+        try? fileManager.removeItem(at: staging)
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+        do {
+            var manifestData: Data?
+            var written = Set<String>()
+            for entry in entries {
+                // Path-Traversal-Schutz: nur Pfade innerhalb des Stagings.
+                let dst = staging.appendingPathComponent(entry.path).standardizedFileURL
+                guard dst.path == staging.path || dst.path.hasPrefix(staging.path + "/") else {
+                    throw MiniZipError.malformed("Pfad-Ausbruch: \(entry.path)")
+                }
+                if entry.path == "bundle-manifest.json" { manifestData = entry.data }
+                try fileManager.createDirectory(at: dst.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+                try entry.data.write(to: dst)
+                written.insert(entry.path)
+            }
+            guard let manifestData else { throw StageError.missingManifest }
+            let manifest: EditorBundleStore.BundleManifest
+            do {
+                manifest = try JSONDecoder().decode(EditorBundleStore.BundleManifest.self, from: manifestData)
+            } catch {
+                throw StageError.invalidManifest(error.localizedDescription)
+            }
+            // Was das Manifest verspricht, muss auch im ZIP liegen — sonst
+            // bootete der Editor mit fehlenden Modulen/Styles.
+            for path in (manifest.jsFiles ?? []) + (manifest.cssFiles ?? []) where !written.contains(path) {
+                throw StageError.missingFile(path)
+            }
+            return Staged(staging: staging, manifest: manifest)
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            throw error
+        }
     }
 }

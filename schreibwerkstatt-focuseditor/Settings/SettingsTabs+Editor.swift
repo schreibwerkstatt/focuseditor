@@ -144,6 +144,7 @@ struct TypographySettingsTab: View {
 
 struct WritingSettingsTab: View {
     @EnvironmentObject private var stats: WritingStatsStore
+    @EnvironmentObject private var core: AppCore
     /// Auto-Save-Debounce in ms (an mountStandaloneFocus durchgereicht).
     @AppStorage(EditorBehaviorPrefs.autosaveKey) private var autosaveMs = 1500.0
     /// Synonym-Hilfe (Cmd+Shift+S) gerätelokal an/aus.
@@ -168,6 +169,9 @@ struct WritingSettingsTab: View {
 
             Section(t("settings.writing.synonymSection")) {
                 Toggle(t("settings.writing.synonymToggle"), isOn: $synonymsEnabled)
+                    .onChange(of: synonymsEnabled) {
+                        Task { await core.bridge.pushSynonymsEnabled() }
+                    }
                 Text(t("settings.writing.synonymHint"))
                     .font(.caption)
                     .foregroundStyle(.secondary)

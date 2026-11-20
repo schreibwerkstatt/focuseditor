@@ -28,9 +28,17 @@ extension WebAssets {
               // Controller mitliefert; sonst still übersprungen (online-only —
               // offline ohnehin kein Roundtrip). i18n kommt lokalisiert (de/en)
               // über die Bridge (synonymConfig.i18n) — kein hartkodierter String.
+              // Der Controller hängt IMMER, wenn das Bundle ihn mitbringt; ob er
+              // reagiert, entscheidet das Live-Flag (Einstellungen ▸ Schreiben,
+              // Swift → `synonymConfig`-Event). Sonst wirkte der Schalter erst
+              // nach einem Neustart, während Toolbar + Kontextmenü ihn sofort
+              // zeigten.
+              let synonymsEnabled = false;
+              fb.on('synonymConfig', (p) => { synonymsEnabled = !!(p && p.enabled); });
               try {
                 const scfg = await fb.synonymConfig();
-                if (scfg && scfg.enabled) {
+                synonymsEnabled = !!(scfg && scfg.enabled);
+                {
                   const mod = await import('./js/cards/editor-synonyme/controller.js');
                   // Range-Mutation + Caret + bubbelndes input-Event (markiert die
                   // Seite dirty) — derselbe geteilte Helper wie die Spellcheck-
@@ -48,7 +56,7 @@ extension WebAssets {
                       root,
                       getBookId: () => currentBookId,
                       getPageId: () => currentPageId,
-                      isEnabled: () => true,
+                      isEnabled: () => synonymsEnabled,
                       i18n,
                       onApplyReplacement: (range, text) => applySpellcheckReplacement(range, text),
                       // Transport über die Bridge (kein direkter fetch).
@@ -115,6 +123,7 @@ extension WebAssets {
                     }
 
                     fb.on('synonyms', (p) => {
+                      if (!synonymsEnabled) return;
                       try {
                         // Bewusst `root` (nicht activeContent()) — genau das
                         // Element, auf dem der Controller lauscht und gegen das

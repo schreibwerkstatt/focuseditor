@@ -26,6 +26,32 @@ extension WebAssets {
             .replacingOccurrences(of: ">", with: "&gt;")
     }
 
+    /// Content-Security-Policy des Boot-Dokuments. HARTE REGEL „WebView lädt nur
+    /// lokal": der Navigations-Guard (`FocusWebView.decidePolicyFor`) sieht nur
+    /// Navigationen, nicht Unterressourcen — ein aus Safari eingefügtes
+    /// `<img src="https://…">` oder eine externe CSS-`url()` lüde WebKit sonst
+    /// selbst aus dem Netz (IP + Lesezeitpunkt an Dritte). Erlaubt ist nur das
+    /// eigene Scheme plus `data:`/`blob:` für Bilder und Schriften (das
+    /// Editor-CSS nutzt `data:`-SVGs). `'unsafe-inline'` braucht das Boot-Modul
+    /// (Inline-`<script>`) und die Typografie-Override-Schicht (`<style>`).
+    /// WKUserScripts und `callAsyncJavaScript` unterliegen der CSP nicht.
+    /// Externe Bilder bleiben im HTML stehen (und synchen normal) — sie werden
+    /// hier nur nicht geladen. `swk-app` = `AppScheme.scheme` (literal, weil das
+    /// Test-Target `AppSchemeHandler.swift` nicht mitkompiliert).
+    static let contentSecurityPolicy = [
+        "default-src 'self' swk-app:",
+        "script-src 'self' swk-app: 'unsafe-inline'",
+        "style-src 'self' swk-app: 'unsafe-inline'",
+        "img-src 'self' swk-app: data: blob:",
+        "font-src 'self' swk-app: data:",
+        "connect-src 'self' swk-app:",
+        "media-src 'none'",
+        "object-src 'none'",
+        "frame-src 'none'",
+        "form-action 'none'",
+        "base-uri 'self'",
+    ].joined(separator: "; ")
+
     static func indexHTML(cssFiles: [String], sourceCommit: String) -> String {
         let links = cssFiles
             .map { "  <link rel=\"stylesheet\" href=\"\(htmlAttributeEscaped($0))\">" }
@@ -35,6 +61,7 @@ extension WebAssets {
         <html lang="de">
         <head>
           <meta charset="utf-8">
+          <meta http-equiv="Content-Security-Policy" content="\(contentSecurityPolicy)">
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <title>Schreibwerkstatt — Focus-Editor</title>
           <!-- GENERIERT vom EditorBundleStore aus dem OTA-Bundle (Quelle @\(htmlAttributeEscaped(sourceCommit))). Nicht von Hand editieren. -->

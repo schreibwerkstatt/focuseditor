@@ -42,6 +42,10 @@ final class PageAdminController: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .idle
+    /// Fehler beim Löschen. Getrennt von `phase`, weil das Löschen aus einem
+    /// Alert startet, der sofort schliesst — die Meldung gehört in den
+    /// Bannerstapel über der Schreibfläche, nicht in den nächsten Dialog.
+    @Published private(set) var deleteError: String?
 
     private let api: APIClient
     private let store: any LocalStore
@@ -60,7 +64,13 @@ final class PageAdminController: ObservableObject {
         self.onServerBase = onServerBase
     }
 
-    func dismissError() { phase = .idle }
+    /// Alte Fehlermeldung verwerfen (beim Öffnen eines Dialogs) — nie während
+    /// ein Aufruf läuft.
+    func dismissError() {
+        if case .failed = phase { phase = .idle }
+    }
+
+    func dismissDeleteError() { deleteError = nil }
 
     // MARK: - Anlegen
 
@@ -70,6 +80,9 @@ final class PageAdminController: ObservableObject {
     /// Der Server hängt sie ans Ende des Buchs (`position = MAX + 1`) — dieselbe
     /// Stelle wie in der Web-App, kein eigenes Sortier-Modell im Client.
     func createPage(named name: String, chapterId: Int? = nil) async {
+        // ⏎ im Textfeld umgeht die Sperre des Knopfs — darum hier: ein
+        // zweiter Aufruf während des ersten legte sonst zwei Abschnitte an.
+        guard phase != .working else { return }
         guard let bookId = library.activeBookId else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -109,6 +122,7 @@ final class PageAdminController: ObservableObject {
     // MARK: - Umbenennen
 
     func renamePage(id: Int, to name: String) async {
+        guard phase != .working else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         phase = .working
@@ -146,7 +160,9 @@ final class PageAdminController: ObservableObject {
     /// „Datenverlust-Schutz vor allem". Umgekehrt wäre der Text weg, während
     /// die Seite serverseitig weiterlebt.
     func deletePage(id: Int) async {
+        guard phase != .working else { return }
         phase = .working
+        deleteError = nil
         do {
             try await api.sendVoid("/content/pages/\(id)", method: .DELETE)
             // Späte Saves (Close-Handler des Editors) verwerfen, BEVOR lokal
@@ -157,7 +173,8 @@ final class PageAdminController: ObservableObject {
             await library.refreshPages()
             log.info("Seite gelöscht: \(id, privacy: .public)")
         } catch {
-            phase = .failed(Self.message(for: error, fallbackKey: "pageadmin.error.delete"))
+            phase = .idle
+            deleteError = Self.message(for: error, fallbackKey: "pageadmin.error.delete")
             log.error("Löschen fehlgeschlagen: \(error.localizedDescription, privacy: .public)")
         }
     }

@@ -40,6 +40,15 @@ enum BrandColor {
     static let warning = dynamic(light: "#b38600", dark: "#d8b040")   // mittel (Amber)
     static let success = dynamic(light: "#34d399", dark: "#4fd9aa")
 
+    // Gefüllte Flächen mit Schrift darauf (WCAG AA, ≥ 4,5:1). Die Töne oben
+    // sind für Icons/Linien auf Papier gedacht; als Hintergrund unter Text
+    // reichten sie nicht (Weiss auf `error` dunkel ≈ 3,6:1, Papier auf `accent`
+    // hell ≈ 3,6:1). Client-eigene Ableitungen, kein Token des Hauptrepos.
+    /// Hintergrund des kritischen Banners (weisse Schrift): ≈ 5,3 / 6,0 : 1.
+    static let errorFill  = dynamic(light: "#c43838", dark: "#b83030")
+    /// Hintergrund des prominenten Knopfs (Schrift in `bg`): ≈ 5,2 / 7,9 : 1.
+    static let accentFill = dynamic(light: "#7d6630", dark: "#c9a961")
+
     /// Baut eine appearance-abhängige Farbe aus zwei Hex-Werten.
     private static func dynamic(light: String, dark: String) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

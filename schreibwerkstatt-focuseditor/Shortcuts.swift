@@ -144,6 +144,12 @@ enum Shortcuts {
         id: "pickerClose", key: .escape, modifiers: [],
         labelKey: "shortcuts.pickerClose", section: .pages, owner: .picker)
 
+    /// Löschen der markierten Zeile (mit Bestätigung). Nur bei leerem Suchfeld:
+    /// mit Suchtext bleibt ⌘⌫ das Feld-Kommando „bis Zeilenanfang löschen".
+    static let pickerDelete = ShortcutSpec(
+        id: "pickerDelete", key: .delete, modifiers: [.command],
+        labelKey: "shortcuts.pickerDelete", section: .pages, owner: .picker)
+
     // MARK: - Editor
     //
     // Die `.editor`-Einträge behandelt der gebündelte Focus-Editor selbst
@@ -201,7 +207,7 @@ enum Shortcuts {
     /// Alle Einträge in Anzeigereihenfolge.
     static let all: [ShortcutSpec] = [
         fullscreen, syncNow, openSettings, mainWindow, thisHelp,
-        newPage, openPage, revisions, pickerOpenFirst, pickerClose,
+        newPage, openPage, revisions, pickerOpenFirst, pickerClose, pickerDelete,
         focusToggle, centerLine, synonyms, bold, italic, underline,
         undo, redo, focusExit,
     ]

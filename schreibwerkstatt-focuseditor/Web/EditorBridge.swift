@@ -94,6 +94,14 @@ final class EditorBridge: NSObject, WKScriptMessageHandlerWithReply, EditorCoord
         deletedPageIds.insert(pageId)
     }
 
+    /// Beim Umhängen auf einen anderen Server-Spiegel leeren: Seiten-IDs gelten
+    /// nur innerhalb EINES Servers. Sonst verwürfe die Bridge auf Server B jeden
+    /// Save einer Seite, die zufällig dieselbe ID hat wie eine auf Server A
+    /// gelöschte.
+    func clearDeletedPages() {
+        deletedPageIds.removeAll()
+    }
+
     /// Lokal gewählte Fokus-Granularität (CSS-Klasse `focus-mode--<value>`).
     /// Vom `FocusController` gesetzt; Default aus UserDefaults, damit der
     /// Boot-Pull schon vor `FocusController.bind(_:)` den richtigen Wert liefert.
@@ -296,6 +304,7 @@ enum BridgeError: LocalizedError {
     case mergeTimedOut
     case jsTimedOut(String)
     case languagetool(status: Int)
+    case pageDeleted(String)
 
     var errorDescription: String? {
         switch self {
@@ -308,6 +317,7 @@ enum BridgeError: LocalizedError {
         case .mergeTimedOut:         return "Bridge: Block-Merge zeitüberschritten"
         case .jsTimedOut(let label): return "Bridge: JS-Aufruf zeitüberschritten (\(label))"
         case .languagetool(let s):   return "Bridge: LanguageTool-Proxy antwortete mit Status \(s)"
+        case .pageDeleted(let id):   return "Bridge: Abschnitt \(id) wurde gelöscht — Save verworfen"
         }
     }
 }

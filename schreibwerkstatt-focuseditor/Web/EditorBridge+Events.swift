@@ -176,6 +176,13 @@ extension EditorBridge {
         await emit("editorTypography", typography.mapValues { $0 as Any? })
     }
 
+    /// Synonym-Hilfe live an/aus (Einstellungen ▸ Schreiben). Der Glue hängt den
+    /// Controller beim Boot immer ein, wenn das Bundle ihn mitbringt, und fragt
+    /// dieses Flag bei jedem ⌘⇧S ab — so wirkt der Schalter ohne Neustart.
+    func pushSynonymsEnabled() async {
+        await emit("synonymConfig", ["enabled": SynonymPrefs.localEnabled])
+    }
+
     /// Erlaubte Inline-Formatierungen (`document.execCommand`-Namen). Whitelist,
     /// damit über diesen Weg nie ein beliebiger execCommand in die Seite gerät —
     /// der Glue reicht den Wert unbesehen durch.
@@ -234,6 +241,14 @@ extension EditorBridge {
         let locale = await bookQuoteLocale(bookId: Self.activeBookId)
         await emit("normalizeQuotes", ["language": locale.language ?? "de",
                                        "region": locale.region ?? "CH"])
+    }
+
+    /// Gibt der Schreibfläche den Tastatur-Fokus zurück (AppKit-First-Responder).
+    /// Der Seiten-Picker löst ihn beim Öffnen (`makeFirstResponder(nil)`); ohne
+    /// Rückgabe kämen nach ⎋ die Tastenanschläge nirgends an.
+    func focusWebView() {
+        guard let webView else { return }
+        webView.window?.makeFirstResponder(webView)
     }
 
     /// Öffnet die Synonym-Hilfe für das Wort unter Auswahl/Caret (`synonyms`-

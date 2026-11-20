@@ -13,7 +13,8 @@
 //  Geteilt zwischen `MiniZipTests` (Reader-Ebene) und `EditorBundleStoreTests`
 //  (OTA-Ebene: Entpacken, Manifest, atomarer Tausch).
 //
-//  CRC bleibt 0 — MiniZip prüft die Prüfsumme bewusst nicht.
+//  CRC-32 wird hier eigenständig (bitweise, ohne Tabelle) berechnet — MiniZip
+//  prüft sie, und eine geteilte Implementierung würde sich selbst bestätigen.
 //
 
 import Foundation
@@ -28,6 +29,18 @@ enum ZipFixture {
         let data: Data
         let method: UInt16
         var cdExtra: Data = Data()
+        /// Bewusst falsche Prüfsumme (Test für die CRC-Ablehnung).
+        var crcOverride: UInt32? = nil
+    }
+
+    /// CRC-32 (IEEE), bitweise — absichtlich anders gebaut als `CRC32` der App.
+    static func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
+        }
+        return ~crc
     }
 
     static func u16(_ v: Int) -> [UInt8] { [UInt8(v & 0xff), UInt8((v >> 8) & 0xff)] }
@@ -53,7 +66,6 @@ enum ZipFixture {
     }
 
     /// Baut ein minimal-gültiges ZIP (Local Headers + Central Directory + EOCD).
-    /// CRC bleibt 0 — MiniZip prüft die Prüfsumme bewusst nicht.
     static func build(_ specs: [FileSpec]) -> Data {
         var local = Data()
         var offsets: [Int] = []
@@ -70,7 +82,7 @@ enum ZipFixture {
             local.append(contentsOf: u16(Int(s.method)))
             local.append(contentsOf: u16(0))            // mod time
             local.append(contentsOf: u16(0))            // mod date
-            local.append(contentsOf: u32(0))            // crc-32 (ungeprüft)
+            local.append(contentsOf: u32(Int(s.crcOverride ?? crc32(s.data)))) // crc-32
             local.append(contentsOf: u32(comp.count))   // comp size
             local.append(contentsOf: u32(s.data.count)) // uncomp size
             local.append(contentsOf: u16(name.count))   // name len
@@ -90,7 +102,7 @@ enum ZipFixture {
             cd.append(contentsOf: u16(Int(s.method)))
             cd.append(contentsOf: u16(0))               // mod time
             cd.append(contentsOf: u16(0))               // mod date
-            cd.append(contentsOf: u32(0))               // crc-32
+            cd.append(contentsOf: u32(Int(s.crcOverride ?? crc32(s.data)))) // crc-32
             cd.append(contentsOf: u32(comps[i].count))  // comp size
             cd.append(contentsOf: u32(s.data.count))    // uncomp size
             cd.append(contentsOf: u16(name.count))      // name len            @28

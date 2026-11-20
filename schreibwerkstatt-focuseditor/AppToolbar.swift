@@ -42,6 +42,22 @@ final class ToolbarUIState: ObservableObject {
     @Published var renamingPage: PagePickerRow?
     /// Seite, deren Löschung bestätigt werden soll.
     @Published var deletingPage: PagePickerRow?
+    /// Steht der Editor (Fenster offen, angemeldet, Bundle bereit)? Die Sheets
+    /// hängen am Editor-Host — ohne ihn merkten sich die Menübefehle (⌘N, ⌘⇧R)
+    /// ihr Sheet nur und liessen es nach dem nächsten Login ungefragt aufspringen.
+    @Published var editorAvailable = false
+
+    /// Editor-Host verschwindet (Abmelden, Fenster zu, Bundle-Fehler): offene
+    /// Dialoge und den Picker zurücksetzen, statt sie beim Wiederkehren
+    /// unvermittelt erneut zu zeigen.
+    func resetTransient() {
+        pickerOpen = false
+        inspectingConflict = nil
+        revisionsOpen = false
+        newPageOpen = false
+        renamingPage = nil
+        deletingPage = nil
+    }
 }
 
 struct AppToolbar: View {
@@ -56,6 +72,9 @@ struct AppToolbar: View {
     /// nötig, weil die Toolbar jetzt in einem eigenen, vom Host getrennten
     /// SwiftUI-Baum (Titelleisten-Accessory) lebt.
     @EnvironmentObject private var toolbarUI: ToolbarUIState
+    /// Laufendes Lektorat — sein Knopf bleibt auch nach dem Schliessen der
+    /// Seite stehen, damit der Lauf abbrechbar bleibt.
+    @EnvironmentObject private var lektorat: LektoratJobStore
 
     /// Hover-Zustand des Überlauf-Menüs (Material-Highlight).
     @State private var overflowHover = false
@@ -175,6 +194,12 @@ struct AppToolbar: View {
                 }
             }
 
+            // Abschnitt während eines Lektorats geschlossen: der Knopf (Spinner,
+            // Klick = Abbrechen) bleibt, sonst liefe der Job unabbrechbar weiter.
+            if library.openPageId == nil && lektorat.isBusy {
+                LektoratToolbarButton()
+            }
+
             SyncStatusLabel(status: sync.status,
                             conflicts: sync.conflicts,
                             lastSyncedAt: sync.lastSyncedAt,
@@ -261,7 +286,7 @@ struct AppToolbar: View {
 
             Divider()
 
-            Button(t("general.signOut")) { auth.signOut() }
+            Button(t("general.signOut")) { SignOutConfirmation.run(auth) }
         } label: {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 14))

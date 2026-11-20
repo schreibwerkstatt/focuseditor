@@ -109,14 +109,37 @@ extension WebAssets {
 
         // Swift→JS Event-Bus. Der Editor-Host abonniert z. B. 'serverUpdate'
         // (saubere offene Seite wurde serverseitig aktualisiert → still neu laden).
+        //
+        // Seiten-Events (`openPage`/`closePage`) vor dem Mount: die Abos
+        // entstehen erst nach `mountStandaloneFocus` + Boot-`loadPage` (beim
+        // leeren Spiegel ggf. sekundenlang übers Netz). Bis dahin merkt sich
+        // der Bus das JÜNGSTE Seiten-Event und spielt es bei `_markReady()`
+        // ab — sonst wählte der Picker eine Seite, der Editor mountete aber
+        // die Boot-Seite, und Toolbar + Schreibfläche zeigten Verschiedenes.
+        // Andere Events (Typografie, Fokus …) puffern bewusst NICHT: deren
+        // Wert holt der Boot-Pull ohnehin frisch, ein später Replay drehte
+        // ihn auf einen älteren Stand zurück.
         _handlers: {},
+        _ready: false,
+        _pendingPageEvent: null,
         on: function (event, cb) {
           (this._handlers[event] = this._handlers[event] || []).push(cb);
         },
         _receive: function (event, payload) {
+          if (!this._ready && (event === 'openPage' || event === 'closePage')) {
+            this._pendingPageEvent = { event: event, payload: payload };
+            return;
+          }
           (this._handlers[event] || []).forEach(function (cb) {
             try { cb(payload); } catch (e) { console.error('[focus-bridge] handler', e); }
           });
+        },
+        _markReady: function () {
+          if (this._ready) return;
+          this._ready = true;
+          const pending = this._pendingPageEvent;
+          this._pendingPageEvent = null;
+          if (pending) this._receive(pending.event, pending.payload);
         },
 
         // Verzögerter Spellcheck-Nachzieh-Versuch (Boot war offline ⇒

@@ -47,6 +47,15 @@ extension PagePickerOverlay {
         open(entry.row)
     }
 
+    /// Fragt nach dem Löschen der markierten Zeile (⌘⌫). Der Picker schliesst
+    /// dafür — der Bestätigungs-Alert hängt am Editor-Host.
+    func deleteSelected() {
+        guard !filtered.isEmpty else { return }
+        let entry = filtered.indices.contains(selected) ? filtered[selected] : filtered[0]
+        isOpen = false
+        toolbarUI.deletingPage = entry.row
+    }
+
     /// Bewegt die Markierung um `delta`, begrenzt auf die Trefferliste.
     func moveSelection(_ delta: Int) {
         guard !filtered.isEmpty else { return }
@@ -93,10 +102,18 @@ extension PagePickerOverlay {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard let window = event.window, window === pickerWindow,
                   window.attachedSheet == nil else { return event }
+            // Laufende IME-Eingabe (z. B. Akzent per Option-Taste, Zeichen-
+            // Auswahl): ⏎ und Pfeile gehören der Komposition, nicht der Liste.
+            if let editor = window.firstResponder as? NSTextView, editor.hasMarkedText() {
+                return event
+            }
             switch event.keyCode {
             case 125: moveSelection(1);  return nil   // ↓
             case 126: moveSelection(-1); return nil   // ↑
             case 36, 76: openSelected(); return nil   // ⏎ / Enter
+            case 51 where event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+                          && query.isEmpty:           // ⌘⌫ (Shortcuts.pickerDelete)
+                deleteSelected(); return nil
             default: return event
             }
         }

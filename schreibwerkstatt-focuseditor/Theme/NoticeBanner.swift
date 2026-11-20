@@ -90,7 +90,7 @@ struct NoticeBanner<Actions: View>: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(tone.isFilled ? BrandColor.error : BrandColor.surface)
+        .background(tone.isFilled ? BrandColor.errorFill : BrandColor.surface)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
